@@ -1,0 +1,10 @@
+.DS_Store
+StickyPrompter.app/
+dist/
+*.zip
+AppIcon.icns
+AppIcon.iconset/
+icon_1024.png
+.make-icon
+.sp-arm64
+.sp-x86_64
