@@ -408,10 +408,12 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
   function normalize(w) {
     return w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
   }
-  // edit distance <= 1 (fast check)
+  // edit distance <= 1 (fast check); short words must match exactly,
+  // otherwise fillers like "so" fuzzy-match "to" and jump the tracker
   function near(a, b) {
     if (a === b) return true;
     const la = a.length, lb = b.length;
+    if (la < 4 || lb < 4) return false;
     if (Math.abs(la - lb) > 1) return false;
     if (la >= 4 && lb >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
     let i = 0, j = 0, edits = 0;
