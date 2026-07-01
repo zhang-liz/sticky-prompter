@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sticky Prompter</title>
+<style>
+  :root {
+    --note-w: 380px;
+    --fs: 22px;
+    --note-alpha: 1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(1200px 600px at 70% -10%, #2b3350 0%, transparent 60%),
+      radial-gradient(900px 500px at 10% 110%, #1f3a33 0%, transparent 60%),
+      #14161f;
+    min-height: 100vh;
+    color: #e8e8ee;
+  }
+
+  /* ---------- Landing / setup panel ---------- */
+  .setup {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 56px 24px 120px;
+  }
+  .setup h1 {
+    font-size: 30px;
+    letter-spacing: -0.02em;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .setup h1 .logo {
+    width: 38px; height: 38px; border-radius: 6px;
+    background: linear-gradient(160deg, #ffe66b, #f7c948);
+    box-shadow: 0 3px 10px rgba(0,0,0,.4), inset 0 -8px 12px rgba(160,110,0,.25);
+    display: inline-block; position: relative; transform: rotate(-4deg);
+  }
+  .setup h1 .logo::after {
+    content: ""; position: absolute; right: 0; bottom: 0;
+    border: 7px solid transparent;
+    border-top-color: rgba(140,100,0,.35);
+    border-left-color: rgba(140,100,0,.35);
+    border-bottom-right-radius: 4px;
+  }
+  .setup p.sub { color: #9aa0b4; margin: 10px 0 28px; line-height: 1.5; }
+  .setup label { display: block; font-size: 13px; font-weight: 600; color: #b8bdd0; margin: 18px 0 6px; }
+  .setup textarea {
+    width: 100%; min-height: 220px; resize: vertical;
+    background: #1d2030; color: #e8e8ee;
+    border: 1px solid #33384f; border-radius: 10px;
+    padding: 14px; font-size: 15px; line-height: 1.55;
+    font-family: inherit;
+  }
+  .setup textarea:focus { outline: none; border-color: #f7c948; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 22px; }
+  button.primary {
+    background: linear-gradient(160deg, #ffe66b, #f7c948); color: #3a2f00;
+    border: none; border-radius: 10px; padding: 12px 22px;
+    font-size: 15px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 3px 12px rgba(247,201,72,.25);
+  }
+  button.primary:hover { filter: brightness(1.05); }
+  button.ghost {
+    background: transparent; color: #b8bdd0; border: 1px solid #3a4059;
+    border-radius: 10px; padding: 11px 18px; font-size: 14px; cursor: pointer;
+  }
+  button.ghost:hover { border-color: #f7c948; color: #f7c948; }
+  .hint {
+    margin-top: 26px; padding: 14px 16px; border-radius: 10px;
+    background: #1d2030; border: 1px solid #2b3047;
+    font-size: 13px; color: #9aa0b4; line-height: 1.6;
+  }
+  .hint b { color: #d6dae8; }
+  .hint kbd {
+    background: #2b3047; border-radius: 4px; padding: 1px 6px;
+    font-family: ui-monospace, monospace; font-size: 12px; color: #d6dae8;
+  }
+  .warn { color: #ff9c9c; font-size: 13px; margin-top: 12px; display: none; }
+
+  /* ---------- Sticky note ---------- */
+  #note {
+    position: fixed; top: 90px; left: calc(100vw - var(--note-w) - 48px);
+    width: var(--note-w);
+    max-height: 70vh;
+    display: none;
+    flex-direction: column;
+    border-radius: 4px 4px 8px 4px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.45), 0 2px 6px rgba(0,0,0,.3);
+    overflow: hidden;
+    z-index: 100;
+    transform: rotate(0.4deg);
+  }
+  #note.visible { display: flex; }
+  #note.pip { position: static; width: 100%; height: 100vh; max-height: none; transform: none; box-shadow: none; border-radius: 0; }
+
+  /* themes */
+  #note[data-theme="yellow"] {
+    background: linear-gradient(175deg,
+      rgba(255, 240, 150, var(--note-alpha)),
+      rgba(250, 222, 100, var(--note-alpha)));
+    color: #4a3d10;
+  }
+  #note[data-theme="dark"] {
+    background: rgba(18, 19, 26, calc(var(--note-alpha) * 0.92));
+    color: #f2f2ee;
+    backdrop-filter: blur(6px);
+  }
+  #note[data-theme="pink"] {
+    background: linear-gradient(175deg,
+      rgba(255, 205, 225, var(--note-alpha)),
+      rgba(250, 180, 205, var(--note-alpha)));
+    color: #55182f;
+  }
+
+  /* folded corner */
+  #note:not(.pip)::after {
+    content: ""; position: absolute; right: 0; bottom: 0;
+    border: 12px solid transparent; pointer-events: none;
+  }
+  #note[data-theme="yellow"]:not(.pip)::after { border-top-color: rgba(160,120,10,.35); border-left-color: rgba(160,120,10,.35); }
+  #note[data-theme="pink"]:not(.pip)::after { border-top-color: rgba(170,60,100,.3); border-left-color: rgba(170,60,100,.3); }
+
+  .note-head {
+    display: flex; align-items: center; gap: 4px;
+    padding: 6px 8px;
+    cursor: grab; user-select: none;
+    flex: none;
+  }
+  #note.pip .note-head { cursor: default; }
+  #note[data-theme="yellow"] .note-head { background: rgba(120, 90, 0, .12); }
+  #note[data-theme="dark"] .note-head { background: rgba(255,255,255,.06); }
+  #note[data-theme="pink"] .note-head { background: rgba(140, 40, 80, .12); }
+
+  .note-head .grip { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .note-head .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor; opacity: .25; flex: none;
+  }
+  .note-head .dot.live { background: #e5484d; opacity: 1; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(229,72,77,.5);} 50% { box-shadow: 0 0 0 5px rgba(229,72,77,0);} }
+  .note-head .title { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; opacity: .55; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .ibtn {
+    border: none; background: transparent; color: inherit;
+    width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    opacity: .65; flex: none; padding: 0;
+  }
+  .ibtn:hover { opacity: 1; background: rgba(0,0,0,.1); }
+  #note[data-theme="dark"] .ibtn:hover { background: rgba(255,255,255,.12); }
+  .ibtn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ibtn.mic-on { opacity: 1; color: #e5484d; }
+
+  .note-body {
+    flex: 1; overflow-y: auto; scroll-behavior: smooth;
+    padding: 14px 18px 40vh 18px;
+    font-size: var(--fs); line-height: 1.55;
+    overscroll-behavior: contain;
+  }
+  #note.font-note .note-body { font-family: "Marker Felt", "Chalkboard SE", "Segoe Print", "Comic Sans MS", cursive; }
+  .note-body::-webkit-scrollbar { width: 6px; }
+  .note-body::-webkit-scrollbar-thumb { background: rgba(0,0,0,.2); border-radius: 3px; }
+  #note[data-theme="dark"] .note-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); }
+
+  .line { margin-bottom: .35em; }
+  .line.gap { margin-bottom: 1em; }
+  .w { cursor: pointer; border-radius: 3px; padding: 0 1px; transition: opacity .15s; }
+  .w.read { opacity: .32; }
+  .w.cur {
+    background: rgba(255, 120, 40, .85); color: #fff;
+    box-shadow: 0 1px 4px rgba(200,80,0,.4);
+  }
+  #note[data-theme="dark"] .w.cur { background: #f7c948; color: #201a00; box-shadow: 0 1px 6px rgba(247,201,72,.45); }
+
+  .note-foot {
+    flex: none; padding: 4px 10px 6px;
+    font-size: 11px; opacity: .5;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-height: 21px;
+  }
+  .progress { height: 3px; flex: none; background: rgba(0,0,0,.12); }
+  #note[data-theme="dark"] .progress { background: rgba(255,255,255,.12); }
+  .progress > div { height: 100%; width: 0%; background: rgba(255,120,40,.9); transition: width .3s; }
+  #note[data-theme="dark"] .progress > div { background: #f7c948; }
+
+  /* ---------- settings popover ---------- */
+  .settings {
+    position: absolute; top: 34px; right: 6px; z-index: 10;
+    width: 240px; padding: 12px 14px;
+    background: #23263a; color: #e8e8ee;
+    border: 1px solid #3a4059; border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.5);
+    display: none; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+  }
+  .settings.open { display: block; }
+  .settings .sec { margin-bottom: 12px; }
+  .settings .sec:last-child { margin-bottom: 0; }
+  .settings .lab { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #9aa0b4; margin-bottom: 6px; }
+  .settings input[type=range] { width: 100%; accent-color: #f7c948; }
+  .seg { display: flex; gap: 4px; }
+  .seg button {
+    flex: 1; padding: 5px 0; font-size: 12px; cursor: pointer;
+    background: #1a1c2b; color: #b8bdd0; border: 1px solid #3a4059; border-radius: 6px;
+  }
+  .seg button.on { background: #f7c948; color: #3a2f00; border-color: #f7c948; font-weight: 700; }
+  .settings select {
+    width: 100%; padding: 5px 8px; border-radius: 6px;
+    background: #1a1c2b; color: #e8e8ee; border: 1px solid #3a4059; font-size: 13px;
+  }
+
+  /* ---------- editor overlay ---------- */
+  .editor-ov {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(10,11,18,.7); backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center; padding: 24px;
+  }
+  .editor-ov.open { display: flex; }
+  .editor-card {
+    width: min(680px, 100%); background: #1d2030;
+    border: 1px solid #33384f; border-radius: 14px; padding: 20px;
+  }
+  .editor-card h2 { font-size: 16px; margin-bottom: 12px; }
+  .editor-card textarea {
+    width: 100%; min-height: 300px; resize: vertical;
+    background: #14161f; color: #e8e8ee;
+    border: 1px solid #33384f; border-radius: 10px;
+    padding: 14px; font-size: 15px; line-height: 1.55; font-family: inherit;
+  }
+  .editor-card .row { justify-content: flex-end; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<div class="setup" id="setup">
+  <h1><span class="logo"></span>Sticky Prompter</h1>
+  <p class="sub">A voice-controlled sticky-note teleprompter that floats on top of your video calls and recordings. It listens as you speak and follows along — no scrolling, no clicking.</p>
+
+  <label for="scriptInput">Your script</label>
+  <textarea id="scriptInput" placeholder="Paste your script here…&#10;&#10;Blank lines become paragraph breaks."></textarea>
+
+  <div class="row">
+    <button class="primary" id="startBtn">Create sticky note</button>
+    <button class="ghost" id="sampleBtn">Load sample script</button>
+  </div>
+  <p class="warn" id="speechWarn">⚠️ Voice tracking needs Chrome (or Edge) — this browser doesn't support the Web Speech API. Timed auto-scroll will still work.</p>
+
+  <div class="hint">
+    <b>How to use it over a video call:</b> click the <b>pop-out button (⧉)</b> on the note — it becomes an always-on-top mini window that floats over Zoom, Meet, or anything else. Park it right under your camera.<br><br>
+    <b>Voice tracking:</b> hit the mic, then just read. Words dim as you say them and the highlight tracks your place — pause, ad-lib, or skip a sentence and it catches up. Click any word to jump there.<br><br>
+    <b>Keys:</b> <kbd>space</kbd> mic on/off · <kbd>←</kbd>/<kbd>→</kbd> nudge position · <kbd>R</kbd> restart · <kbd>E</kbd> edit script
+  </div>
+</div>
+
+<!-- The sticky note -->
+<div id="note" data-theme="yellow" class="font-note">
+  <div class="note-head" id="noteHead">
+    <div class="grip">
+      <span class="dot" id="liveDot"></span>
+      <span class="title" id="noteTitle">Sticky Prompter</span>
+    </div>
+    <button class="ibtn" id="micBtn" title="Start/stop voice tracking (space)">
+      <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    </button>
+    <button class="ibtn" id="restartBtn" title="Restart from top (R)">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
+    </button>
+    <button class="ibtn" id="editBtn" title="Edit script (E)">
+      <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+    </button>
+    <button class="ibtn" id="gearBtn" title="Settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>
+    </button>
+    <button class="ibtn" id="pipBtn" title="Pop out — float on top of every app">
+      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><rect x="12" y="3" width="9" height="7" rx="1.5"/></svg>
+    </button>
+
+    <div class="settings" id="settingsPanel">
+      <div class="sec">
+        <div class="lab">Theme</div>
+        <div class="seg" id="themeSeg">
+          <button data-theme="yellow">Yellow</button>
+          <button data-theme="pink">Pink</button>
+          <button data-theme="dark">Dark</button>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="lab">Font</div>
+        <div class="seg" id="fontSeg">
+          <button data-font="note">Handwritten</button>
+          <button data-font="clean">Clean</button>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="lab">Text size — <span id="fsVal"></span></div>
+        <input type="range" id="fsRange" min="14" max="44" step="1">
+      </div>
+      <div class="sec">
+        <div class="lab">Note width</div>
+        <input type="range" id="wRange" min="240" max="640" step="10">
+      </div>
+      <div class="sec">
+        <div class="lab">Opacity (on-page note)</div>
+        <input type="range" id="alphaRange" min="0.3" max="1" step="0.05">
+      </div>
+      <div class="sec">
+        <div class="lab">Mode</div>
+        <div class="seg" id="modeSeg">
+          <button data-mode="voice">🎤 Voice</button>
+          <button data-mode="timer">⏱ Auto-scroll</button>
+        </div>
+      </div>
+      <div class="sec" id="speedSec" style="display:none">
+        <div class="lab">Scroll speed</div>
+        <input type="range" id="speedRange" min="10" max="120" step="5">
+      </div>
+      <div class="sec">
+        <div class="lab">Language</div>
+        <select id="langSel">
+          <option value="en-US">English (US)</option>
+          <option value="en-GB">English (UK)</option>
+          <option value="es-ES">Español</option>
+          <option value="fr-FR">Français</option>
+          <option value="de-DE">Deutsch</option>
+          <option value="pt-BR">Português (BR)</option>
+          <option value="zh-CN">中文 (普通话)</option>
+          <option value="ja-JP">日本語</option>
+          <option value="ko-KR">한국어</option>
+          <option value="hi-IN">हिन्दी</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="note-body" id="noteBody"></div>
+  <div class="note-foot" id="heardLine"></div>
+  <div class="progress"><div id="progBar"></div></div>
+</div>
+
+<!-- Script editor overlay -->
+<div class="editor-ov" id="editorOv">
+  <div class="editor-card">
+    <h2>Edit script</h2>
+    <textarea id="editorTa"></textarea>
+    <div class="row">
+      <button class="ghost" id="editorCancel">Cancel</button>
+      <button class="primary" id="editorSave">Save &amp; restart</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const LS_KEY = 'stickyPrompter.v1';
+
+  const SAMPLE = `Hey everyone, welcome back to the channel!
+
+Today I want to show you something I have been really excited about. We are going to build a tiny app together, and by the end of this video you will be able to ship your own version in under an hour.
+
+Before we dive in, a quick note. Everything I show today is free and open source, and the link to the full code is in the description below.
+
+Okay, let's get started. The first thing we need to do is open the terminal and create a new project folder.`;
+
+  // ---------- state ----------
+  const App = {
+    tokens: [],        // { norm, el }
+    pos: 0,
+    prevPainted: 0,
+    listening: false,
+    wantListening: false,
+    utterConsumed: 0,
+    recognition: null,
+    mode: 'voice',
+    timerRAF: null,
+    pipWin: null,
+    settings: {
+      theme: 'yellow', font: 'note', fs: 22, width: 380,
+      alpha: 1, mode: 'voice', speed: 40, lang: 'en-US',
+      script: '', noteX: null, noteY: null,
+    },
+  };
+  window.App = App; // debug handle
+
+  const LOOKAHEAD = 12;
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) $('speechWarn').style.display = 'block';
+
+  // ---------- persistence ----------
+  function save() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(App.settings)); } catch (e) {}
+  }
+  function load() {
+    try {
+      const s = JSON.parse(localStorage.getItem(LS_KEY));
+      if (s) Object.assign(App.settings, s);
+    } catch (e) {}
+  }
+
+  // ---------- text utils ----------
+  function normalize(w) {
+    return w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  }
+  // edit distance <= 1 (fast check)
+  function near(a, b) {
+    if (a === b) return true;
+    const la = a.length, lb = b.length;
+    if (Math.abs(la - lb) > 1) return false;
+    if (la >= 4 && lb >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
+    let i = 0, j = 0, edits = 0;
+    while (i < la && j < lb) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      if (++edits > 1) return false;
+      if (la > lb) i++;
+      else if (lb > la) j++;
+      else { i++; j++; }
+    }
+    return edits + (la - i) + (lb - j) <= 1;
+  }
+
+  // ---------- render script ----------
+  function buildScript(text) {
+    App.settings.script = text;
+    App.tokens = [];
+    App.pos = 0;
+    App.prevPainted = 0;
+    App.utterConsumed = 0;
+    const body = $('noteBody');
+    body.innerHTML = '';
+    const lines = text.split('\n');
+    let idx = 0;
+    lines.forEach((line, li) => {
+      const words = line.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) return; // blank line -> handled via gap class on previous
+      const div = document.createElement('div');
+      div.className = 'line';
+      if (li + 1 < lines.length && lines[li + 1].trim() === '') div.classList.add('gap');
+      words.forEach(w => {
+        const norm = normalize(w);
+        const span = document.createElement('span');
+        span.className = 'w';
+        span.textContent = w;
+        const myIdx = idx;
+        span.addEventListener('click', () => { jumpTo(myIdx); });
+        div.appendChild(span);
+        div.appendChild(document.createTextNode(' '));
+        if (norm) { App.tokens.push({ norm, el: span }); idx++; }
+        else { span.style.opacity = .6; } // pure punctuation token, not tracked
+      });
+      body.appendChild(div);
+    });
+    paint();
+    body.scrollTop = 0;
+    save();
+  }
+
+  // ---------- highlight painting ----------
+  function paint() {
+    const { tokens, pos } = App;
+    const lo = Math.min(App.prevPainted, pos);
+    const hi = Math.max(App.prevPainted, pos);
+    for (let i = Math.max(0, lo - 1); i <= Math.min(tokens.length - 1, hi + 1); i++) {
+      const el = tokens[i].el;
+      el.classList.toggle('read', i < pos);
+      el.classList.toggle('cur', i === pos);
+    }
+    App.prevPainted = pos;
+    $('progBar').style.width = tokens.length ? (pos / tokens.length * 100) + '%' : '0%';
+    scrollToCurrent();
+  }
+
+  function scrollToCurrent() {
+    const t = App.tokens[App.pos];
+    if (!t) return;
+    const body = $('noteBody');
+    const r = t.el.getBoundingClientRect();
+    const c = body.getBoundingClientRect();
+    const target = body.scrollTop + (r.top - c.top) - c.height * 0.35;
+    if (Math.abs(target - body.scrollTop) > 8) body.scrollTop = target;
+  }
+
+  function jumpTo(i) {
+    App.pos = Math.max(0, Math.min(i, App.tokens.length));
+    paint();
+  }
+
+  // ---------- voice matching ----------
+  function consumeWord(raw) {
+    const w = normalize(raw);
+    if (!w) return;
+    const { tokens } = App;
+    const end = Math.min(App.pos + LOOKAHEAD, tokens.length);
+    for (let j = App.pos; j < end; j++) {
+      if (near(w, tokens[j].norm)) {
+        App.pos = j + 1;
+        break;
+      }
+    }
+  }
+  App.consumeWord = consumeWord; // exposed for testing
+
+  function handleTranscript(words, isFinal) {
+    const fresh = words.slice(App.utterConsumed);
+    fresh.forEach(consumeWord);
+    App.utterConsumed = isFinal ? 0 : words.length;
+    paint();
+    $('heardLine').textContent = App.listening ? '“…' + words.slice(-7).join(' ') + '”' : '';
+    if (App.pos >= App.tokens.length && App.tokens.length) {
+      $('heardLine').textContent = '🎉 End of script';
+    }
+  }
+  App.handleTranscript = handleTranscript; // exposed for testing
+
+  function initRecognition() {
+    if (!SR) return null;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = App.settings.lang;
+    rec.onresult = (ev) => {
+      const res = ev.results[ev.results.length - 1];
+      const words = res[0].transcript.trim().split(/\s+/).filter(Boolean);
+      handleTranscript(words, res.isFinal);
+    };
+    rec.onend = () => {
+      App.listening = false;
+      if (App.wantListening) {
+        setTimeout(() => { try { rec.start(); App.listening = true; } catch (e) {} }, 250);
+      } else {
+        updateMicUI();
+      }
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        App.wantListening = false;
+        updateMicUI();
+        $('heardLine').textContent = '⚠️ Microphone blocked — allow mic access for this site.';
+      }
+    };
+    return rec;
+  }
+
+  function updateMicUI() {
+    const on = App.wantListening;
+    $('micBtn').classList.toggle('mic-on', on && App.mode === 'voice');
+    $('liveDot').classList.toggle('live', on);
+    if (!on && App.mode === 'voice') $('heardLine').textContent = '';
+  }
+
+  function toggleGo() {
+    if (App.mode === 'timer') { toggleTimer(); return; }
+    if (!SR) { $('heardLine').textContent = '⚠️ Voice needs Chrome/Edge — use Auto-scroll mode.'; return; }
+    if (App.wantListening) {
+      App.wantListening = false;
+      try { App.recognition && App.recognition.stop(); } catch (e) {}
+    } else {
+      if (!App.recognition) App.recognition = initRecognition();
+      App.recognition.lang = App.settings.lang;
+      App.utterConsumed = 0;
+      try { App.recognition.start(); App.listening = true; App.wantListening = true; } catch (e) {}
+    }
+    updateMicUI();
+  }
+
+  // ---------- timer scroll mode ----------
+  function toggleTimer() {
+    if (App.timerRAF) {
+      cancelAnimationFrame(App.timerRAF);
+      App.timerRAF = null;
+      App.wantListening = false;
+      updateMicUI();
+      return;
+    }
+    App.wantListening = true;
+    updateMicUI();
+    const body = $('noteBody');
+    let last = performance.now();
+    let acc = body.scrollTop;
+    const step = (now) => {
+      acc += App.settings.speed * (now - last) / 1000;
+      last = now;
+      body.scrollTop = acc;
+      App.timerRAF = requestAnimationFrame(step);
+    };
+    App.timerRAF = requestAnimationFrame(step);
+  }
+
+  // ---------- pop-out (Document Picture-in-Picture) ----------
+  async function popOut() {
+    const note = $('note');
+    if (App.pipWin) { App.pipWin.close(); return; }
+    if (!('documentPictureInPicture' in window)) {
+      alert('Pop-out needs Chrome or Edge 116+ (Document Picture-in-Picture API).');
+      return;
+    }
+    const pip = await documentPictureInPicture.requestWindow({
+      width: App.settings.width,
+      height: 340,
+    });
+    App.pipWin = pip;
+    // copy styles
+    [...document.styleSheets].forEach(ss => {
+      try {
+        const css = [...ss.cssRules].map(r => r.cssText).join('\n');
+        const st = pip.document.createElement('style');
+        st.textContent = css;
+        pip.document.head.appendChild(st);
+      } catch (e) {}
+    });
+    pip.document.title = 'Sticky Prompter';
+    pip.document.body.style.margin = '0';
+    pip.document.body.style.background = 'transparent';
+    note.classList.add('pip');
+    pip.document.body.appendChild(note);
+    bindKeys(pip.document);
+    pip.addEventListener('pagehide', () => {
+      note.classList.remove('pip');
+      document.body.appendChild(note);
+      App.pipWin = null;
+      applyNotePosition();
+      paint();
+    });
+    paint();
+  }
+
+  // ---------- dragging ----------
+  function applyNotePosition() {
+    const note = $('note');
+    const s = App.settings;
+    if (s.noteX != null) { note.style.left = s.noteX + 'px'; note.style.top = s.noteY + 'px'; }
+  }
+  (function enableDrag() {
+    const note = $('note');
+    const head = $('noteHead');
+    let sx, sy, ox, oy, dragging = false;
+    head.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.ibtn') || e.target.closest('.settings') || note.classList.contains('pip')) return;
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      const r = note.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      head.setPointerCapture(e.pointerId);
+    });
+    head.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const x = Math.max(0, ox + e.clientX - sx);
+      const y = Math.max(0, oy + e.clientY - sy);
+      note.style.left = x + 'px';
+      note.style.top = y + 'px';
+      App.settings.noteX = x; App.settings.noteY = y;
+    });
+    head.addEventListener('pointerup', () => { dragging = false; save(); });
+  })();
+
+  // ---------- settings UI ----------
+  function applySettings() {
+    const s = App.settings;
+    const note = $('note');
+    note.dataset.theme = s.theme;
+    note.classList.toggle('font-note', s.font === 'note');
+    document.documentElement.style.setProperty('--fs', s.fs + 'px');
+    document.documentElement.style.setProperty('--note-w', s.width + 'px');
+    document.documentElement.style.setProperty('--note-alpha', s.alpha);
+    if (App.pipWin) {
+      const de = App.pipWin.document.documentElement;
+      de.style.setProperty('--fs', s.fs + 'px');
+      de.style.setProperty('--note-w', s.width + 'px');
+      de.style.setProperty('--note-alpha', s.alpha);
+    }
+    $('fsVal').textContent = s.fs + 'px';
+    $('fsRange').value = s.fs;
+    $('wRange').value = s.width;
+    $('alphaRange').value = s.alpha;
+    $('speedRange').value = s.speed;
+    $('langSel').value = s.lang;
+    [...$('themeSeg').children].forEach(b => b.classList.toggle('on', b.dataset.theme === s.theme));
+    [...$('fontSeg').children].forEach(b => b.classList.toggle('on', b.dataset.font === s.font));
+    [...$('modeSeg').children].forEach(b => b.classList.toggle('on', b.dataset.mode === s.mode));
+    $('speedSec').style.display = s.mode === 'timer' ? '' : 'none';
+    App.mode = s.mode;
+    applyNotePosition();
+  }
+
+  $('themeSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    App.settings.theme = b.dataset.theme; applySettings(); save();
+  });
+  $('fontSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    App.settings.font = b.dataset.font; applySettings(); save();
+  });
+  $('modeSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    // stop whatever is running before switching
+    if (App.wantListening || App.timerRAF) {
+      if (App.mode === 'timer' && App.timerRAF) toggleTimer();
+      else if (App.wantListening) toggleGo();
+    }
+    App.settings.mode = b.dataset.mode; applySettings(); save();
+  });
+  $('fsRange').addEventListener('input', e => { App.settings.fs = +e.target.value; applySettings(); save(); });
+  $('wRange').addEventListener('input', e => { App.settings.width = +e.target.value; applySettings(); save(); });
+  $('alphaRange').addEventListener('input', e => { App.settings.alpha = +e.target.value; applySettings(); save(); });
+  $('speedRange').addEventListener('input', e => { App.settings.speed = +e.target.value; save(); });
+  $('langSel').addEventListener('change', e => {
+    App.settings.lang = e.target.value; save();
+    if (App.recognition) App.recognition.lang = e.target.value;
+  });
+
+  $('gearBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    $('settingsPanel').classList.toggle('open');
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.settings') && !e.target.closest('#gearBtn')) {
+      $('settingsPanel').classList.remove('open');
+    }
+  });
+
+  // ---------- main buttons ----------
+  $('micBtn').addEventListener('click', toggleGo);
+  $('restartBtn').addEventListener('click', () => { App.pos = 0; App.utterConsumed = 0; paint(); $('noteBody').scrollTop = 0; });
+  $('pipBtn').addEventListener('click', popOut);
+  $('editBtn').addEventListener('click', openEditor);
+
+  function openEditor() {
+    $('editorTa').value = App.settings.script;
+    $('editorOv').classList.add('open');
+    $('editorTa').focus();
+  }
+  $('editorCancel').addEventListener('click', () => $('editorOv').classList.remove('open'));
+  $('editorSave').addEventListener('click', () => {
+    buildScript($('editorTa').value);
+    $('editorOv').classList.remove('open');
+  });
+
+  // ---------- setup panel ----------
+  $('sampleBtn').addEventListener('click', () => { $('scriptInput').value = SAMPLE; });
+  $('startBtn').addEventListener('click', () => {
+    const text = $('scriptInput').value.trim() || SAMPLE;
+    buildScript(text);
+    $('note').classList.add('visible');
+    $('note').scrollIntoView; // no-op safeguard
+  });
+
+  // ---------- keyboard ----------
+  function bindKeys(doc) {
+    doc.addEventListener('keydown', (e) => {
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'textarea' || tag === 'input' || tag === 'select') return;
+      if (!$('note').classList.contains('visible') && !App.pipWin) return;
+      if (e.code === 'Space') { e.preventDefault(); toggleGo(); }
+      else if (e.key === 'ArrowRight') { jumpTo(App.pos + 1); }
+      else if (e.key === 'ArrowLeft') { jumpTo(App.pos - 1); }
+      else if (e.key === 'ArrowDown') { jumpTo(App.pos + 8); }
+      else if (e.key === 'ArrowUp') { jumpTo(App.pos - 8); }
+      else if (e.key === 'r' || e.key === 'R') { App.pos = 0; App.utterConsumed = 0; paint(); }
+      else if (e.key === 'e' || e.key === 'E') { openEditor(); }
+    });
+  }
+  bindKeys(document);
+
+  // ---------- boot ----------
+  load();
+  applySettings();
+  if (App.settings.script) {
+    $('scriptInput').value = App.settings.script;
+    buildScript(App.settings.script);
+    $('note').classList.add('visible');
+  }
+})();
+</script>
+</body>
+</html>
