@@ -375,7 +375,9 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
     prevPainted: 0,
     listening: false,
     wantListening: false,
-    utterConsumed: 0,
+    anchor: 0,          // pos at the start of the current utterance
+    pending: [],        // recent unmatched spoken words (for skip detection)
+    discardUtterance: false,
     recognition: null,
     mode: 'voice',
     timerRAF: null,
@@ -433,7 +435,8 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
     App.tokens = [];
     App.pos = 0;
     App.prevPainted = 0;
-    App.utterConsumed = 0;
+    App.anchor = 0;
+    App.pending = [];
     const body = $('noteBody');
     body.innerHTML = '';
     const lines = text.split('\n');
@@ -490,28 +493,56 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
 
   function jumpTo(i) {
     App.pos = Math.max(0, Math.min(i, App.tokens.length));
+    App.anchor = App.pos;
+    App.pending = [];
+    // drop the in-flight utterance so stale words don't re-match from here
+    if (App.wantListening) App.discardUtterance = true;
     paint();
   }
 
   // ---------- voice matching ----------
+  // Strict word-by-word tracking:
+  //  - a single spoken word only advances if it matches the NEXT script word
+  //  - jumping ahead (skipped sentence) requires TWO consecutive spoken words
+  //    matching two consecutive script words within the lookahead window
   function consumeWord(raw) {
     const w = normalize(raw);
     if (!w) return;
     const { tokens } = App;
-    const end = Math.min(App.pos + LOOKAHEAD, tokens.length);
-    for (let j = App.pos; j < end; j++) {
-      if (near(w, tokens[j].norm)) {
-        App.pos = j + 1;
-        break;
+    if (App.pos < tokens.length && near(w, tokens[App.pos].norm)) {
+      App.pos++;
+      App.pending = [];
+      return;
+    }
+    App.pending.push(w);
+    if (App.pending.length > 4) App.pending.shift();
+    if (App.pending.length >= 2) {
+      const a = App.pending[App.pending.length - 2];
+      const b = App.pending[App.pending.length - 1];
+      const end = Math.min(App.pos + LOOKAHEAD, tokens.length - 1);
+      for (let j = App.pos; j < end; j++) {
+        if (near(a, tokens[j].norm) && near(b, tokens[j + 1].norm)) {
+          App.pos = j + 2;
+          App.pending = [];
+          return;
+        }
       }
     }
   }
   App.consumeWord = consumeWord; // exposed for testing
 
   function handleTranscript(words, isFinal) {
-    const fresh = words.slice(App.utterConsumed);
-    fresh.forEach(consumeWord);
-    App.utterConsumed = isFinal ? 0 : words.length;
+    if (App.discardUtterance) {
+      // user repositioned mid-utterance: ignore this utterance entirely
+      if (isFinal) { App.discardUtterance = false; App.anchor = App.pos; }
+      return;
+    }
+    // Recompute the whole utterance from its anchor — the recognizer keeps
+    // revising earlier interim words, so incremental consumption drifts.
+    App.pos = App.anchor;
+    App.pending = [];
+    words.forEach(consumeWord);
+    if (isFinal) App.anchor = App.pos;
     paint();
     $('heardLine').textContent = App.listening ? '“…' + words.slice(-7).join(' ') + '”' : '';
     if (App.pos >= App.tokens.length && App.tokens.length) {
@@ -565,7 +596,9 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
     } else {
       if (!App.recognition) App.recognition = initRecognition();
       App.recognition.lang = App.settings.lang;
-      App.utterConsumed = 0;
+      App.anchor = App.pos;
+      App.pending = [];
+      App.discardUtterance = false;
       try { App.recognition.start(); App.listening = true; App.wantListening = true; } catch (e) {}
     }
     updateMicUI();
@@ -728,7 +761,7 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
 
   // ---------- main buttons ----------
   $('micBtn').addEventListener('click', toggleGo);
-  $('restartBtn').addEventListener('click', () => { App.pos = 0; App.utterConsumed = 0; paint(); $('noteBody').scrollTop = 0; });
+  $('restartBtn').addEventListener('click', () => { jumpTo(0); $('noteBody').scrollTop = 0; });
   $('pipBtn').addEventListener('click', popOut);
   $('editBtn').addEventListener('click', openEditor);
 
@@ -763,7 +796,7 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
       else if (e.key === 'ArrowLeft') { jumpTo(App.pos - 1); }
       else if (e.key === 'ArrowDown') { jumpTo(App.pos + 8); }
       else if (e.key === 'ArrowUp') { jumpTo(App.pos - 8); }
-      else if (e.key === 'r' || e.key === 'R') { App.pos = 0; App.utterConsumed = 0; paint(); }
+      else if (e.key === 'r' || e.key === 'R') { jumpTo(0); }
       else if (e.key === 'e' || e.key === 'E') { openEditor(); }
     });
   }
