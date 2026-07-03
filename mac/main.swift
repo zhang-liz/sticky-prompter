@@ -55,6 +55,7 @@ final class PrompterModel: NSObject, ObservableObject {
 
     var tokens: [Token] = []
     var paras: [Para] = []
+    var vocab: [String] = []
 
     private var anchor = 0
     private var pending: [String] = []
@@ -118,6 +119,13 @@ final class PrompterModel: NSObject, ObservableObject {
                 pid += 1
             }
         }
+        // vocabulary biasing: prime the recognizer with the script's words,
+        // longest (rarest) first — big accuracy win for names/jargon
+        var seen = Set<String>()
+        vocab = tokens.map { $0.norm }
+            .filter { $0.count >= 3 && seen.insert($0).inserted }
+            .sorted { $0.count > $1.count }
+        if vocab.count > 100 { vocab = Array(vocab.prefix(100)) }
         pos = 0
         anchor = 0
         pending = []
@@ -227,7 +235,11 @@ final class PrompterModel: NSObject, ObservableObject {
         let gen = taskGen
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
-        if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+        req.taskHint = .dictation
+        req.contextualStrings = vocab   // bias recognition toward the script
+        if #available(macOS 13.0, *) { req.addsPunctuation = false }
+        // NOTE: server-based recognition is noticeably more accurate than
+        // on-device, so we don't set requiresOnDeviceRecognition
         request = req
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
