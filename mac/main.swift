@@ -44,6 +44,8 @@ enum Theme: String { case dark, yellow }
 
 final class PrompterModel: NSObject, ObservableObject {
     @Published var script: String
+    @Published var scriptName: String
+    @Published var savedNames: [String] = []
     @Published var pos = 0
     @Published var fontSize: Double
     @Published var bgOpacity: Double
@@ -73,11 +75,13 @@ final class PrompterModel: NSObject, ObservableObject {
     override init() {
         let d = UserDefaults.standard
         script = d.string(forKey: "script") ?? PrompterModel.sample
+        scriptName = d.string(forKey: "scriptName") ?? ""
         fontSize = d.object(forKey: "fontSize") as? Double ?? 22
         bgOpacity = d.object(forKey: "bgOpacity") as? Double ?? 0.65
         theme = Theme(rawValue: d.string(forKey: "theme") ?? "dark") ?? .dark
         super.init()
         rebuild()
+        refreshSavedNames()
     }
 
     static let sample = """
@@ -91,9 +95,51 @@ final class PrompterModel: NSObject, ObservableObject {
     func persist() {
         let d = UserDefaults.standard
         d.set(script, forKey: "script")
+        d.set(scriptName, forKey: "scriptName")
         d.set(fontSize, forKey: "fontSize")
         d.set(bgOpacity, forKey: "bgOpacity")
         d.set(theme.rawValue, forKey: "theme")
+    }
+
+    // MARK: script library (plain .txt files, user-accessible)
+
+    static let scriptsDir: URL = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Sticky Prompter/Scripts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private func scriptURL(_ name: String) -> URL {
+        let safe = name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespaces)
+        return Self.scriptsDir.appendingPathComponent(safe + ".txt")
+    }
+
+    func refreshSavedNames() {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: Self.scriptsDir, includingPropertiesForKeys: nil)) ?? []
+        savedNames = urls
+            .filter { $0.pathExtension == "txt" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    func saveScript(_ name: String, text: String) {
+        try? text.write(to: scriptURL(name), atomically: true, encoding: .utf8)
+        refreshSavedNames()
+    }
+
+    func loadScript(_ name: String) -> String? {
+        try? String(contentsOf: scriptURL(name), encoding: .utf8)
+    }
+
+    func deleteScript(_ name: String) {
+        // move to Trash rather than deleting outright
+        try? FileManager.default.trashItem(at: scriptURL(name), resultingItemURL: nil)
+        refreshSavedNames()
     }
 
     func rebuild() {
@@ -366,9 +412,10 @@ struct ContentView: View {
             Circle()
                 .fill(m.listening ? Color.red : mainColor.opacity(0.25))
                 .frame(width: 8, height: 8)
-            Text("STICKY PROMPTER")
+            Text(m.scriptName.isEmpty ? "STICKY PROMPTER" : m.scriptName.uppercased())
                 .font(.system(size: 10, weight: .bold))
                 .kerning(1)
+                .lineLimit(1)
                 .foregroundColor(mainColor.opacity(0.5))
             Spacer()
             ctl(m.listening ? "mic.fill" : "mic", help: "Voice tracking on/off (space)") { m.toggleMic() }
@@ -423,26 +470,90 @@ struct ContentView: View {
 struct EditorView: View {
     @ObservedObject var m: PrompterModel
     @State private var draft = ""
+    @State private var name = ""
+
+    var nameOK: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Edit script").font(.headline)
-            TextEditor(text: $draft)
-                .font(.system(size: 14))
-                .frame(minWidth: 440, minHeight: 300)
-            HStack {
-                Spacer()
-                Button("Cancel") { m.editing = false }
-                Button("Save & restart") {
-                    m.script = draft
-                    m.rebuild()
-                    m.editing = false
+            Text("Scripts").font(.headline)
+            HStack(alignment: .top, spacing: 12) {
+                // saved-scripts library
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("SAVED")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondary)
+                    if m.savedNames.isEmpty {
+                        Text("Nothing saved yet.\nName your script and hit\n“Save to library”.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(m.savedNames, id: \.self) { n in
+                                HStack(spacing: 4) {
+                                    Button {
+                                        if let t = m.loadScript(n) { draft = t; name = n }
+                                    } label: {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "doc.text")
+                                            Text(n).lineLimit(1)
+                                            Spacer(minLength: 0)
+                                        }
+                                        .padding(.vertical, 3)
+                                        .padding(.horizontal, 6)
+                                        .background(n == name ? Color.accentColor.opacity(0.18) : Color.clear)
+                                        .cornerRadius(5)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Load “\(n)”")
+                                    Button {
+                                        m.deleteScript(n)
+                                        if name == n { name = "" }
+                                    } label: {
+                                        Image(systemName: "trash").font(.system(size: 10))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundColor(.secondary)
+                                    .help("Move “\(n)” to Trash")
+                                }
+                            }
+                        }
+                    }
+                    Spacer()
                 }
-                .keyboardShortcut(.defaultAction)
+                .frame(width: 175)
+
+                Divider()
+
+                // editor
+                VStack(spacing: 8) {
+                    TextField("Script name (used when saving)", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                    TextEditor(text: $draft)
+                        .font(.system(size: 14))
+                        .frame(minWidth: 380, minHeight: 300)
+                    HStack {
+                        Button("Save to library") { m.saveScript(name, text: draft) }
+                            .disabled(!nameOK)
+                        Spacer()
+                        Button("Cancel") { m.editing = false }
+                        Button("Use script") {
+                            if nameOK { m.saveScript(name, text: draft) }
+                            m.scriptName = nameOK ? name : ""
+                            m.script = draft
+                            m.rebuild()
+                            m.editing = false
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
             }
         }
         .padding(16)
-        .onAppear { draft = m.script }
+        .frame(minWidth: 640, minHeight: 400)
+        .onAppear { draft = m.script; name = m.scriptName }
     }
 }
 
