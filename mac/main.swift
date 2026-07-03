@@ -535,7 +535,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - self test (headless matcher verification: run with --selftest)
+
+func runSelfTest() {
+    let m = PrompterModel()
+    m.script = PrompterModel.sample
+    m.rebuild()
+    var fails = 0
+    func expect(_ name: String, _ got: Int, _ want: Int) {
+        let ok = got == want
+        if !ok { fails += 1 }
+        print("\(ok ? "PASS" : "FAIL") \(name): pos=\(got) want=\(want)")
+    }
+    // word-by-word
+    m.handleTranscript(["hey"], isFinal: false)
+    expect("one word", m.pos, 1)
+    m.handleTranscript(["hey", "everyone", "welcome"], isFinal: false)
+    expect("interim recompute", m.pos, 3)
+    // stray common word must not jump ahead
+    m.handleTranscript(["hey", "everyone", "welcome", "to"], isFinal: false)
+    expect("no filler jump", m.pos, 3)
+    m.handleTranscript(["hey", "everyone", "welcome", "back", "to", "the", "channel"], isFinal: true)
+    expect("sentence 1", m.pos, 7)
+    // ad-lib doesn't move it
+    m.handleTranscript(["um", "you", "know", "like", "honestly"], isFinal: true)
+    expect("ad-lib parked", m.pos, 7)
+    // one garbled word resyncs on the next word ("today" garbled, "i" heard)
+    m.handleTranscript(["toady", "i", "want"], isFinal: true)
+    expect("garbled resync", m.pos, 10)
+    // fuzzy match on longer words
+    m.handleTranscript(["show", "you", "somthing"], isFinal: true)
+    expect("fuzzy longer word", m.pos, 14)
+    // deliberate skip via two consecutive words ("really excited" = 17,18)
+    m.handleTranscript(["really", "excited", "about"], isFinal: true)
+    expect("bigram skip", m.pos, 20)
+    // jump resets cleanly
+    m.jump(to: 30)
+    m.handleTranscript(["end", "of", "this", "video"], isFinal: false)
+    expect("resume after jump", m.pos, 36)
+    print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
+    exit(fails == 0 ? 0 : 1)
+}
+
 // MARK: - main
+
+if CommandLine.arguments.contains("--selftest") {
+    runSelfTest()
+}
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
