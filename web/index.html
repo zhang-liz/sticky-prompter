@@ -514,6 +514,13 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
       App.pending = [];
       return;
     }
+    // one garbled/missed word while otherwise in sync: resync on the next
+    // word — but only on a content word (4+ letters), otherwise fillers
+    // like "to"/"the" skip over unspoken words
+    if (!App.pending.length && App.pos + 1 < tokens.length && w.length >= 4 && near(w, tokens[App.pos + 1].norm)) {
+      App.pos += 2;
+      return;
+    }
     App.pending.push(w);
     if (App.pending.length > 4) App.pending.shift();
     if (App.pending.length >= 2) {

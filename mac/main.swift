@@ -152,6 +152,13 @@ final class PrompterModel: NSObject, ObservableObject {
             pending = []
             return
         }
+        // one garbled/missed word while otherwise in sync: resync on the next
+        // word — but only on a content word (4+ letters), otherwise fillers
+        // like "to"/"the" skip over unspoken words
+        if pending.isEmpty, pos + 1 < tokens.count, w.count >= 4, near(w, tokens[pos + 1].norm) {
+            pos += 2
+            return
+        }
         pending.append(w)
         if pending.count > pendingCap { pending.removeFirst() }
         if pending.count >= 2 {
