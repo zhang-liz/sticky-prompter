@@ -67,6 +67,7 @@ final class PrompterModel: NSObject, ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Timer?
+    private var taskGen = 0   // stale-task guard: cancelled tasks still fire callbacks
 
     override init() {
         let d = UserDefaults.standard
@@ -222,13 +223,15 @@ final class PrompterModel: NSObject, ObservableObject {
     }
 
     private func startTask(_ rec: SFSpeechRecognizer) {
+        taskGen += 1
+        let gen = taskGen
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
         request = req
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
-                guard let self = self, self.listening else { return }
+                guard let self = self, self.listening, gen == self.taskGen else { return }
                 if let r = result {
                     let words = r.bestTranscription.segments.map { $0.substring }
                     self.handleTranscript(words, isFinal: r.isFinal)
@@ -245,7 +248,7 @@ final class PrompterModel: NSObject, ObservableObject {
     /// fresh recognition task so the running transcript never grows unbounded.
     private func scheduleSilenceRollover() {
         silenceTimer?.invalidate()
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: 1.6, repeats: false) { [weak self] _ in
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
             guard let self = self, self.listening else { return }
             self.restartRecognition()
         }
@@ -255,7 +258,7 @@ final class PrompterModel: NSObject, ObservableObject {
         guard listening, let rec = recognizer else { return }
         anchor = pos
         pending = []
-        task?.cancel()
+        task?.cancel()   // its callback is ignored via the taskGen guard
         task = nil
         request?.endAudio()
         request = nil
