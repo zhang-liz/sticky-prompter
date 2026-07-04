@@ -1,5 +1,7 @@
 #!/bin/bash
 # Build StickyPrompter.app from source. Requires Xcode Command Line Tools.
+#   ./build.sh           build only (app stays in this folder)
+#   ./build.sh install   build + install to /Applications
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -23,16 +25,24 @@ fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-
 cp Info.plist "$APP/Contents/Info.plist"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 echo -n "APPL????" > "$APP/Contents/PkgInfo"
 
-swiftc -O \
-  -o "$APP/Contents/MacOS/StickyPrompter" \
-  main.swift
+# universal binary so the app runs on both Apple Silicon and Intel Macs
+swiftc -O -target arm64-apple-macos13 -o .sp-arm64 main.swift
+swiftc -O -target x86_64-apple-macos13 -o .sp-x86_64 main.swift
+lipo -create .sp-arm64 .sp-x86_64 -output "$APP/Contents/MacOS/StickyPrompter"
+rm -f .sp-arm64 .sp-x86_64
 
 # ad-hoc sign so macOS associates mic/speech permissions with the bundle
 codesign --force --deep -s - "$APP"
+echo "✅ Built $APP"
 
-echo "✅ Built $APP — run with: open $APP"
+if [ "${1:-}" = "install" ]; then
+  pkill -f "StickyPrompter.app/Contents/MacOS/StickyPrompter" 2>/dev/null || true
+  rm -rf "/Applications/$APP"
+  cp -R "$APP" /Applications/
+  touch "/Applications/$APP"
+  echo "✅ Installed to /Applications — find it in Spotlight or Launchpad as “Sticky Prompter”"
+fi
