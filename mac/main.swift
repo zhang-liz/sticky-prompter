@@ -38,7 +38,15 @@ func near(_ a: String, _ b: String) -> Bool {
 // MARK: - Model
 
 struct Token { let text: String; let norm: String }
-struct Para: Identifiable { let id: Int; let range: Range<Int> }
+struct Row: Identifiable { let id: Int; let range: Range<Int>; let newPara: Bool }
+
+/// Does this raw word end a sentence? (ignoring trailing quotes/brackets)
+func endsSentence(_ raw: String) -> Bool {
+    var s = raw
+    while let last = s.last, "\"')]”’".contains(last) { s.removeLast() }
+    guard let last = s.last else { return false }
+    return ".!?…:".contains(last)
+}
 
 final class PrompterModel: NSObject, ObservableObject {
     @Published var script: String
@@ -56,7 +64,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var clickThrough = false
 
     var tokens: [Token] = []
-    var paras: [Para] = []
+    var rows: [Row] = []
     var vocab: [String] = []
 
     private var anchor = 0
@@ -154,25 +162,34 @@ final class PrompterModel: NSObject, ObservableObject {
 
     func rebuild() {
         tokens = []
-        paras = []
-        var pid = 0
+        rows = []
+        var rid = 0
         for line in script.components(separatedBy: "\n") {
             let words = line.split(separator: " ").map(String.init).filter { !$0.isEmpty }
             if words.isEmpty { continue }
-            let start = tokens.count
+            var start = tokens.count
+            var newPara = rid > 0
             for w in words {
                 let n = normWord(w)
-                if n.isEmpty, !tokens.isEmpty, tokens.count > start {
+                if n.isEmpty, tokens.count > start {
                     // punctuation-only fragment: glue to the previous word
                     let prev = tokens.removeLast()
                     tokens.append(Token(text: prev.text + " " + w, norm: prev.norm))
                 } else {
                     tokens.append(Token(text: w, norm: n))
                 }
+                // close the row at sentence-final punctuation so scrolling can
+                // pin the sentence being read to the top edge of the window
+                if endsSentence(w), tokens.count > start {
+                    rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara))
+                    rid += 1
+                    start = tokens.count
+                    newPara = false
+                }
             }
             if tokens.count > start {
-                paras.append(Para(id: pid, range: start..<tokens.count))
-                pid += 1
+                rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara))
+                rid += 1
             }
         }
         // vocabulary biasing: prime the recognizer with the script's words,
@@ -188,9 +205,9 @@ final class PrompterModel: NSObject, ObservableObject {
         persist()
     }
 
-    var currentParaID: Int {
-        for p in paras where p.range.contains(min(pos, max(0, tokens.count - 1))) { return p.id }
-        return paras.last?.id ?? 0
+    var currentRowID: Int {
+        for r in rows where r.range.contains(min(pos, max(0, tokens.count - 1))) { return r.id }
+        return rows.last?.id ?? 0
     }
 
     var progress: Double { tokens.isEmpty ? 0 : Double(pos) / Double(tokens.count) }
@@ -203,6 +220,8 @@ final class PrompterModel: NSObject, ObservableObject {
     private func consume(_ raw: String) {
         let w = normWord(raw)
         if w.isEmpty { return }
+        // hop over untracked tokens (punctuation-only, e.g. a lone "—")
+        while pos < tokens.count, tokens[pos].norm.isEmpty { pos += 1 }
         if pos < tokens.count, near(w, tokens[pos].norm) {
             pos += 1
             pending = []
@@ -370,38 +389,41 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            // script first: the sentence being read sits at the very top,
+            // as close to the camera as possible
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: m.fontSize * 0.6) {
-                        ForEach(m.paras) { p in
-                            Text(attributed(p))
+                    VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
+                        ForEach(m.rows) { r in
+                            Text(attributed(r))
                                 .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
                                 .lineSpacing(m.fontSize * 0.35)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .id(p.id)
+                                .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
+                                .id(r.id)
                         }
-                        Color.clear.frame(height: 260)
+                        Color.clear.frame(height: 340)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.top, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: m.pos) { _ in
                     withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(m.currentParaID, anchor: UnitPoint(x: 0, y: 0.3))
+                        proxy.scrollTo(m.currentRowID, anchor: UnitPoint(x: 0, y: 0.02))
                     }
                 }
             }
             footer
+            header
         }
         .background(bgColor)
         .sheet(isPresented: $m.editing) { EditorView(m: m) }
     }
 
-    func attributed(_ p: Para) -> AttributedString {
+    func attributed(_ r: Row) -> AttributedString {
         var out = AttributedString()
-        for i in p.range {
+        for i in r.range {
             var run = AttributedString(m.tokens[i].text + " ")
             if i < m.pos {
                 run.foregroundColor = mainColor.opacity(0.32)
@@ -451,7 +473,6 @@ struct ContentView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .padding(.top, 14) // room for hidden titlebar / traffic lights
         .background(mainColor.opacity(0.06))
     }
 
@@ -600,6 +621,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
+        // no traffic lights — the top edge belongs to the script (quit via menu bar icon)
+        p.standardWindowButton(.closeButton)?.isHidden = true
+        p.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        p.standardWindowButton(.zoomButton)?.isHidden = true
         p.contentView = NSHostingView(rootView: ContentView(m: model))
         p.setFrameAutosaveName("StickyPrompterWindow")
         if p.frame.origin == .zero {
