@@ -40,8 +40,6 @@ func near(_ a: String, _ b: String) -> Bool {
 struct Token { let text: String; let norm: String }
 struct Para: Identifiable { let id: Int; let range: Range<Int> }
 
-enum Theme: String { case dark, yellow }
-
 final class PrompterModel: NSObject, ObservableObject {
     @Published var script: String
     @Published var scriptName: String
@@ -49,7 +47,9 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var pos = 0
     @Published var fontSize: Double
     @Published var bgOpacity: Double
-    @Published var theme: Theme
+    @Published var bgR: Double
+    @Published var bgG: Double
+    @Published var bgB: Double
     @Published var listening = false
     @Published var editing = false
     @Published var status = ""
@@ -78,7 +78,15 @@ final class PrompterModel: NSObject, ObservableObject {
         scriptName = d.string(forKey: "scriptName") ?? ""
         fontSize = d.object(forKey: "fontSize") as? Double ?? 22
         bgOpacity = d.object(forKey: "bgOpacity") as? Double ?? 0.65
-        theme = Theme(rawValue: d.string(forKey: "theme") ?? "dark") ?? .dark
+        if let r = d.object(forKey: "bgR") as? Double,
+           let g = d.object(forKey: "bgG") as? Double,
+           let b = d.object(forKey: "bgB") as? Double {
+            bgR = r; bgG = g; bgB = b
+        } else if d.string(forKey: "theme") == "yellow" {   // migrate old theme setting
+            bgR = 1.0; bgG = 0.94; bgB = 0.55
+        } else {
+            bgR = 0.07; bgG = 0.07; bgB = 0.10
+        }
         super.init()
         rebuild()
         refreshSavedNames()
@@ -98,7 +106,9 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(scriptName, forKey: "scriptName")
         d.set(fontSize, forKey: "fontSize")
         d.set(bgOpacity, forKey: "bgOpacity")
-        d.set(theme.rawValue, forKey: "theme")
+        d.set(bgR, forKey: "bgR")
+        d.set(bgG, forKey: "bgG")
+        d.set(bgB, forKey: "bgB")
     }
 
     // MARK: script library (plain .txt files, user-accessible)
@@ -350,14 +360,13 @@ final class PrompterModel: NSObject, ObservableObject {
 struct ContentView: View {
     @ObservedObject var m: PrompterModel
 
-    var mainColor: Color { m.theme == .dark ? Color(white: 0.96) : Color(red: 0.29, green: 0.24, blue: 0.06) }
-    var bgColor: Color {
-        m.theme == .dark
-            ? Color(red: 0.07, green: 0.07, blue: 0.10).opacity(m.bgOpacity)
-            : Color(red: 1.0, green: 0.94, blue: 0.55).opacity(m.bgOpacity)
-    }
-    var hiBG: Color { m.theme == .dark ? Color(red: 0.97, green: 0.79, blue: 0.28) : Color(red: 1.0, green: 0.47, blue: 0.16) }
-    var hiFG: Color { m.theme == .dark ? Color(red: 0.13, green: 0.10, blue: 0.0) : .white }
+    // text/highlight colors adapt to the chosen background's brightness
+    var luminance: Double { 0.299 * m.bgR + 0.587 * m.bgG + 0.114 * m.bgB }
+    var isLightBG: Bool { luminance > 0.55 }
+    var mainColor: Color { isLightBG ? Color(red: 0.15, green: 0.12, blue: 0.05) : Color(white: 0.96) }
+    var bgColor: Color { Color(red: m.bgR, green: m.bgG, blue: m.bgB).opacity(m.bgOpacity) }
+    var hiBG: Color { isLightBG ? Color(red: 1.0, green: 0.47, blue: 0.16) : Color(red: 0.97, green: 0.79, blue: 0.28) }
+    var hiFG: Color { isLightBG ? .white : Color(red: 0.13, green: 0.10, blue: 0.0) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -423,8 +432,19 @@ struct ContentView: View {
             ctl("arrow.counterclockwise", help: "Restart from top (R)") { m.restartFromTop() }
             ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
             ctl("textformat.size.larger", help: "Bigger text") { m.fontSize = min(48, m.fontSize + 2); m.persist() }
-            ctl("circle.lefthalf.filled", help: "Theme") { m.theme = m.theme == .dark ? .yellow : .dark; m.persist() }
-            ctl("pencil", help: "Edit script (E)") { m.editing = true }
+            ColorPicker("", selection: Binding(
+                get: { Color(red: m.bgR, green: m.bgG, blue: m.bgB) },
+                set: { c in
+                    let ns = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(srgbRed: 0.07, green: 0.07, blue: 0.10, alpha: 1)
+                    m.bgR = Double(ns.redComponent)
+                    m.bgG = Double(ns.greenComponent)
+                    m.bgB = Double(ns.blueComponent)
+                    m.persist()
+                }))
+                .labelsHidden()
+                .frame(width: 26)
+                .help("Background color")
+            ctl("pencil", help: "Scripts — edit, save, load (E)") { m.editing = true }
             Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
                 .frame(width: 64)
                 .help("Background transparency")
