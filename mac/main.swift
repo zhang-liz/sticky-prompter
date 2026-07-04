@@ -621,6 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
+        p.sharingType = .none   // invisible in screen recordings & screen shares
         // no traffic lights — the top edge belongs to the script (quit via menu bar icon)
         p.standardWindowButton(.closeButton)?.isHidden = true
         p.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -651,6 +652,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ct = NSMenuItem(title: "Click-through (ignore mouse)", action: #selector(toggleClickThrough), keyEquivalent: "t")
         ct.target = self
         menu.addItem(ct)
+        let hide = NSMenuItem(title: "Hide from screen sharing & recording", action: #selector(toggleCaptureHidden), keyEquivalent: "h")
+        hide.target = self
+        hide.state = .on
+        menu.addItem(hide)
         let show = NSMenuItem(title: "Show note", action: #selector(showNote), keyEquivalent: "s")
         show.target = self
         menu.addItem(show)
@@ -664,6 +669,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.clickThrough.toggle()
         panel.ignoresMouseEvents = model.clickThrough
         sender.state = model.clickThrough ? .on : .off
+    }
+
+    @objc func toggleCaptureHidden(_ sender: NSMenuItem) {
+        let hidden = panel.sharingType == .none
+        panel.sharingType = hidden ? .readOnly : .none
+        sender.state = hidden ? .off : .on
     }
 
     @objc func showNote() {
