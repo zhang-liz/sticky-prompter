@@ -521,6 +521,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("Start prompting (Esc)")
         }
+        .padding(.leading, 70)   // clear the traffic lights (fullSizeContentView)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(mainColor.opacity(0.06))
@@ -673,6 +674,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = PrompterModel()
     var panel: NSPanel!
     var statusItem: NSStatusItem!
+    var subs = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let p = NSPanel(
@@ -692,11 +694,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.hasShadow = true
         // invisible in screen recordings & screen shares (persisted preference)
         p.sharingType = model.captureHidden ? .none : .readOnly
-        p.ignoresMouseEvents = model.clickThrough
-        // no traffic lights — the top edge belongs to the script (quit via menu bar icon)
-        p.standardWindowButton(.closeButton)?.isHidden = true
-        p.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        p.standardWindowButton(.zoomButton)?.isHidden = true
         p.contentView = NSHostingView(rootView: ContentView(m: model))
         p.setFrameAutosaveName("StickyPrompterWindow")
         if p.frame.origin == .zero {
@@ -710,6 +707,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         setupKeys()
+        model.$live
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] live in self?.applyMode(live: live) }
+            .store(in: &subs)
+        applyMode(live: model.live)
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -720,6 +722,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Sticky Prompter")
         let menu = NSMenu()
+        let mode = NSMenuItem(title: "Edit script", action: #selector(toggleMode), keyEquivalent: "e")
+        mode.target = self
+        mode.tag = 2
+        menu.addItem(mode)
+        menu.addItem(.separator())
         let ct = NSMenuItem(title: "Click-through (ignore mouse)", action: #selector(toggleClickThrough), keyEquivalent: "t")
         ct.target = self
         ct.tag = 1
@@ -756,14 +763,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    @objc func toggleMode() {
+        if model.live { model.enterEdit() } else { model.goLive() }
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Edit mode = normal window (traffic lights, minimizable, takes keyboard).
+    /// Live mode = bare floating note.
+    func applyMode(live: Bool) {
+        guard let p = panel else { return }
+        if live {
+            p.styleMask.remove(.miniaturizable)
+        } else {
+            p.styleMask.insert(.miniaturizable)
+            // click-through would make editing impossible
+            if model.clickThrough {
+                model.clickThrough = false
+                model.persist()
+            }
+            p.makeKeyAndOrderFront(nil)
+        }
+        p.ignoresMouseEvents = live && model.clickThrough
+        p.becomesKeyOnlyIfNeeded = live
+        for b: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+            p.standardWindowButton(b)?.isHidden = live
+        }
+        statusItem?.menu?.item(withTag: 1)?.state = model.clickThrough ? .on : .off
+        statusItem?.menu?.item(withTag: 2)?.title = live ? "Edit script" : "Go live"
+    }
+
     func setupKeys() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             guard let self = self, !self.model.editing else { return ev }
+            // Esc in edit mode commits and goes live, even while typing
+            if ev.keyCode == 53, !self.model.live {
+                self.model.goLive()
+                return nil
+            }
             if let fr = self.panel.firstResponder, fr is NSTextView { return ev }
+            guard self.model.live else { return ev }
             switch ev.charactersIgnoringModifiers?.lowercased() {
             case " ": self.model.toggleMic(); return nil
             case "r": self.model.restartFromTop(); return nil
-            case "e": self.model.editing = true; return nil
+            case "e": self.model.enterEdit(); return nil
             default: break
             }
             switch ev.keyCode {
