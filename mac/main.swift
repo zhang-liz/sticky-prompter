@@ -1102,7 +1102,7 @@ struct EditorView: View {
                             m.editing = false
                             DispatchQueue.main.async { m.openScriptFile() }
                         } label: {
-                            Label("Open File…", systemImage: "folder")
+                            Label("Open File…", systemImage: "folder").fixedSize()
                         }
                         .help("Use a text, Markdown or Word file from anywhere as the script")
                         Button {
@@ -1117,7 +1117,7 @@ struct EditorView: View {
                                 a.runModal()
                             }
                         } label: {
-                            Label("Save to Library", systemImage: "square.and.arrow.down")
+                            Label("Save to Library", systemImage: "square.and.arrow.down").fixedSize()
                         }
                         .disabled(!nameOK)
                         Spacer()
@@ -1203,6 +1203,17 @@ struct ScriptRow: View {
 
 // MARK: - App delegate / window
 
+/// NSPanel closes itself on Escape by default (cancelOperation) — which
+/// reads as the app quitting. Esc must always mean "toggle edit/live".
+final class PrompterPanel: NSPanel {
+    var onEscape: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onEscape?(); return }
+        super.keyDown(with: event)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = PrompterModel()
     var panel: NSPanel!
@@ -1210,10 +1221,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var subs = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let p = NSPanel(
+        let p = PrompterPanel(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 460),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered, defer: false)
+        p.onEscape = { [weak self] in
+            guard let self = self, !self.model.editing else { return }
+            if self.model.live { self.model.enterEdit() } else { self.model.goLive() }
+        }
         p.titleVisibility = .hidden
         p.titlebarAppearsTransparent = true
         p.isMovableByWindowBackground = true
