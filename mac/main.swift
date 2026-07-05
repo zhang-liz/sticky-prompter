@@ -792,14 +792,19 @@ struct ContentView: View {
 
     // edit mode: type straight into the note
     var editor: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack {
             if m.script.isEmpty {
-                Text("Type your script here, then Go Live.")
-                    .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
-                    .foregroundColor(mainColor.opacity(0.35))
-                    .padding(.horizontal, 17)
-                    .padding(.top, 8)
-                    .allowsHitTesting(false)
+                VStack(spacing: 10) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 30, weight: .light))
+                    Text("Type your script")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    Text("or press ⌘O to open a file — then Go Live")
+                        .font(.system(size: 12, design: .rounded))
+                }
+                .foregroundColor(mainColor.opacity(0.35))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
             }
             TextEditor(text: $m.script)
                 .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
@@ -841,84 +846,119 @@ struct ContentView: View {
     }
 
     var editBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             Text(!m.status.isEmpty ? m.status
                  : m.scriptName.isEmpty ? "STICKY PROMPTER" : m.scriptName.uppercased())
-                .font(.system(size: 10, weight: .bold))
-                .kerning(1)
+                .font(.system(size: 10.5, weight: .semibold))
+                .kerning(0.8)
                 .lineLimit(1)
                 .layoutPriority(1)   // don't let the controls squeeze the name to one letter
-                .foregroundColor(mainColor.opacity(0.5))
+                .foregroundColor(mainColor.opacity(0.55))
             Spacer(minLength: 6)
-            ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
-            ctl("textformat.size.larger", help: "Bigger text") { m.fontSize = min(48, m.fontSize + 2); m.persist() }
+            HStack(spacing: 1) {
+                ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
+                ctl("textformat.size.larger", help: "Bigger text") { m.fontSize = min(48, m.fontSize + 2); m.persist() }
+            }
             ColorPicker("", selection: bgBinding)
                 .labelsHidden()
                 .frame(width: 26)
                 .help("Background color")
             Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
-                .frame(width: 64)
+                .controlSize(.mini)
+                .frame(width: 68)
                 .help("Background transparency")
-            ctl("folder", help: "Open a text file as the script") { m.openScriptFile() }
-            ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
-            ctl("books.vertical", help: "Script library — save, load, delete") { m.editing = true }
+            Divider().frame(height: 14).opacity(0.4)
+            HStack(spacing: 1) {
+                ctl("folder", help: "Open a text file as the script (⌘O)") { m.openScriptFile() }
+                ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
+                ctl("books.vertical", help: "Script library — save, load, delete") { m.editing = true }
+            }
             Button { m.goLive() } label: {
                 Label("Go Live", systemImage: "play.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11.5, weight: .bold))
                     .fixedSize()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(hiBG.opacity(scriptEmpty ? 0.35 : 1))
-                    .foregroundColor(hiFG.opacity(scriptEmpty ? 0.5 : 1))
-                    .cornerRadius(6)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(LinearGradient(colors: [hiBG, hiBG.opacity(0.8)],
+                                                 startPoint: .top, endPoint: .bottom))
+                    )
+                    .foregroundColor(hiFG)
+                    .shadow(color: hiBG.opacity(scriptEmpty ? 0 : 0.35), radius: 3, y: 1)
+                    .opacity(scriptEmpty ? 0.45 : 1)
             }
             .buttonStyle(.plain)
             .disabled(scriptEmpty)
             .help(scriptEmpty ? "Type or open a script first" : "Start prompting (Esc)")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(mainColor.opacity(0.06))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.thinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(mainColor.opacity(0.08)).frame(height: 1)
+        }
     }
 
     func ctl(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 22, height: 20)
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(mainColor.opacity(0.75))
-        .help(help)
+        CtlButton(symbol: symbol, help: help, color: mainColor, action: action)
     }
 
     var footer: some View {
-        VStack(spacing: 0) {
-            if m.status.isEmpty && !m.listening {
-                Text(m.panelIsKey ? "space = mic · esc = edit" : "click the note first, then space = mic")
-                    .font(.system(size: 10))
-                    .foregroundColor(mainColor.opacity(0.4))
+        VStack(alignment: .leading, spacing: 5) {
+            let hint = !m.status.isEmpty ? m.status
+                     : !m.listening ? (m.panelIsKey ? "space = mic · esc = edit"
+                                                    : "click the note first, then space = mic")
+                     : ""
+            if !hint.isEmpty {
+                Text(hint)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(mainColor.opacity(0.65))
                     .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 4)
-            }
-            if !m.status.isEmpty {
-                Text(m.status)
-                    .font(.system(size: 10))
-                    .foregroundColor(mainColor.opacity(0.5))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 4)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule(style: .continuous).fill(.thinMaterial))
+                    .padding(.leading, 10)
             }
             GeometryReader { g in
-                Rectangle().fill(hiBG)
-                    .frame(width: g.size.width * m.progress)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(mainColor.opacity(0.12))
+                    Capsule().fill(hiBG)
+                        .frame(width: max(4, g.size.width * m.progress))
+                        .animation(.easeOut(duration: 0.25), value: m.progress)
+                }
             }
-            .frame(height: 3)
-            .background(mainColor.opacity(0.12))
+            .frame(height: 4)
+            .padding(.horizontal, 10)
         }
+        .padding(.bottom, 8)
+    }
+}
+
+/// Icon button with a hover highlight, sized for comfortable clicking.
+struct CtlButton: View {
+    let symbol: String
+    let help: String
+    let color: Color
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 26, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(color.opacity(hovering ? 0.12 : 0))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(color.opacity(hovering ? 0.95 : 0.7))
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help(help)
     }
 }
 
@@ -978,49 +1018,29 @@ struct EditorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Scripts").font(.headline)
-            HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Scripts").font(.title3.weight(.semibold))
+            HStack(alignment: .top, spacing: 14) {
                 // saved-scripts library
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("SAVED")
-                        .font(.system(size: 10, weight: .bold))
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Library")
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.secondary)
                     if m.savedNames.isEmpty {
-                        Text("No scripts here yet.\nName your script and hit\n“Save to library”.")
+                        Text("No scripts here yet.\nName your script and hit\n“Save to Library”.")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
+                            .padding(.top, 2)
                     }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(m.savedNames, id: \.self) { n in
-                                HStack(spacing: 4) {
-                                    Button {
-                                        guard confirmDiscard() else { return }
-                                        if let t = m.loadScript(n) { draft = t; name = n; snapshot = t; loadedName = n }
-                                    } label: {
-                                        HStack(spacing: 5) {
-                                            Image(systemName: "doc.text")
-                                            Text(n).lineLimit(1)
-                                            Spacer(minLength: 0)
-                                        }
-                                        .padding(.vertical, 3)
-                                        .padding(.horizontal, 6)
-                                        .background(n == name ? Color.accentColor.opacity(0.18) : Color.clear)
-                                        .cornerRadius(5)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Load “\(n)”")
-                                    Button {
-                                        m.deleteScript(n)
-                                        if name == n { name = "" }
-                                    } label: {
-                                        Image(systemName: "trash").font(.system(size: 10))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundColor(.secondary)
-                                    .help("Move “\(n)” to Trash")
+                                ScriptRow(name: n, selected: n == name) {
+                                    guard confirmDiscard() else { return }
+                                    if let t = m.loadScript(n) { draft = t; name = n; snapshot = t; loadedName = n }
+                                } onDelete: {
+                                    m.deleteScript(n)
+                                    if name == n { name = "" }
                                 }
                             }
                         }
@@ -1033,11 +1053,11 @@ struct EditorView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .font(.system(size: 10))
+                    .font(.system(size: 10.5))
                     .foregroundColor(.secondary)
                     .help(m.libraryDir.path)
                     HStack(spacing: 6) {
-                        Button("Choose folder…") { m.chooseLibraryFolder() }
+                        Button("Choose Folder…") { m.chooseLibraryFolder() }
                             .help("Switch the library to another folder")
                         if !m.usingDefaultLibrary {
                             Button("Default") { m.setLibraryDir(PrompterModel.defaultScriptsDir) }
@@ -1045,33 +1065,47 @@ struct EditorView: View {
                         }
                     }
                     .controlSize(.small)
-                    Button("Open file…") {
-                        guard confirmDiscard() else { return }
-                        // close the sheet before running the open panel —
-                        // state set while both modals unwind gets dropped
-                        m.editing = false
-                        DispatchQueue.main.async { m.openScriptFile() }
-                    }
-                    .controlSize(.small)
-                    .help("Use a single text file from anywhere as the script")
                 }
-                .frame(width: 175)
+                .frame(width: 185)
 
                 Divider()
 
                 // editor
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     TextField("Script name (used when saving)", text: $name)
                         .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
                     TextEditor(text: $draft)
                         .font(.system(size: 14))
-                        .frame(minWidth: 380, minHeight: 300)
-                    HStack {
-                        Button("New") {
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color(nsColor: .textBackgroundColor))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(.separator, lineWidth: 1)
+                        )
+                        .frame(minWidth: 400, minHeight: 320)
+                    HStack(spacing: 8) {
+                        Button {
                             if confirmDiscard() { draft = ""; name = ""; snapshot = ""; loadedName = "" }
+                        } label: {
+                            Label("New", systemImage: "plus")
                         }
                         .help("Start a blank script")
-                        Button("Save to library") {
+                        Button {
+                            guard confirmDiscard() else { return }
+                            // close the sheet before running the open panel —
+                            // state set while both modals unwind gets dropped
+                            m.editing = false
+                            DispatchQueue.main.async { m.openScriptFile() }
+                        } label: {
+                            Label("Open File…", systemImage: "folder")
+                        }
+                        .help("Use a text, Markdown or Word file from anywhere as the script")
+                        Button {
                             guard confirmOverwrite() else { return }
                             if m.saveScript(name, text: draft) {
                                 snapshot = draft
@@ -1082,6 +1116,8 @@ struct EditorView: View {
                                 a.informativeText = "Check that the library folder still exists and is writable."
                                 a.runModal()
                             }
+                        } label: {
+                            Label("Save to Library", systemImage: "square.and.arrow.down")
                         }
                         .disabled(!nameOK)
                         Spacer()
@@ -1089,7 +1125,7 @@ struct EditorView: View {
                             guard confirmDiscard() else { return }
                             m.editing = false
                         }
-                        Button("Use script") {
+                        Button("Use Script") {
                             guard confirmDetachSource(), nameOK ? confirmOverwrite() : true else { return }
                             if nameOK { m.saveScript(name, text: draft) }
                             m.scriptName = nameOK ? name : ""
@@ -1100,18 +1136,68 @@ struct EditorView: View {
                             m.persist()
                             m.editing = false
                         }
+                        .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                     }
                 }
             }
         }
-        .padding(16)
-        .frame(minWidth: 640, minHeight: 400)
+        .padding(20)
+        .frame(minWidth: 700, minHeight: 440)
         .onAppear {
             m.refreshSavedNames()   // pick up files added/removed in Finder
             draft = m.script; name = m.scriptName; snapshot = m.script
             loadedName = m.scriptName
         }
+    }
+}
+
+/// Library row: full-row hover highlight, trash appears on hover.
+struct ScriptRow: View {
+    let name: String
+    let selected: Bool
+    let onLoad: () -> Void
+    let onDelete: () -> Void
+    @State private var hovering = false
+
+    init(name: String, selected: Bool, onLoad: @escaping () -> Void, onDelete: @escaping () -> Void) {
+        self.name = name
+        self.selected = selected
+        self.onLoad = onLoad
+        self.onDelete = onDelete
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Button(action: onLoad) {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text")
+                        .foregroundColor(selected ? .accentColor : .secondary)
+                    Text(name).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 12))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Load “\(name)”")
+            if hovering {
+                Button(action: onDelete) {
+                    Image(systemName: "trash").font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("Move “\(name)” to Trash")
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.16)
+                     : hovering ? Color.primary.opacity(0.06) : .clear)
+        )
+        .onHover { hovering = $0 }
     }
 }
 
