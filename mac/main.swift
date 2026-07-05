@@ -66,6 +66,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var clickThrough = false
     @Published var captureHidden = true
     @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
+    @Published var sourceURL: URL?   // external file the script came from; saves write back to it
 
     var tokens: [Token] = []
     var rows: [Row] = []
@@ -108,6 +109,9 @@ final class PrompterModel: NSObject, ObservableObject {
                 libraryDir = URL(fileURLWithPath: path, isDirectory: true)
             }   // folder gone → stay on the default library
         }
+        if let path = d.string(forKey: "sourceURL"), FileManager.default.fileExists(atPath: path) {
+            sourceURL = URL(fileURLWithPath: path)
+        }
         super.init()
         rebuild()
         refreshSavedNames()
@@ -140,6 +144,8 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(clickThrough, forKey: "clickThrough")
         d.set(captureHidden, forKey: "captureHidden")
         d.set(libraryDir.path, forKey: "libraryDir")
+        if let u = sourceURL { d.set(u.path, forKey: "sourceURL") }
+        else { d.removeObject(forKey: "sourceURL") }
     }
 
     // MARK: script library (plain .txt files, user-accessible)
@@ -197,8 +203,20 @@ final class PrompterModel: NSObject, ObservableObject {
     }
 
     /// Pick a single text file anywhere on disk and use it as the script
-    /// right away. The next save writes a copy into the library folder.
+    /// right away. Saves write back to that file until a library script
+    /// takes over.
     func openScriptFile() {
+        // the current script would have no way back once replaced — ask
+        if sourceURL == nil,
+           scriptName.trimmingCharacters(in: .whitespaces).isEmpty,
+           !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let a = NSAlert()
+            a.messageText = "Replace the current script?"
+            a.informativeText = "What's on the note isn't saved to the library."
+            a.addButton(withTitle: "Replace")
+            a.addButton(withTitle: "Cancel")
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -215,15 +233,29 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         script = text
         scriptName = url.deletingPathExtension().lastPathComponent
+        sourceURL = url
         rebuild()
         persist()
         editing = false
-        flash("Opened “\(scriptName)”")
+        live = false   // land in the edit interface with the file loaded
+        flash("Opened “\(url.lastPathComponent)”")
     }
 
-    /// One-click / ⌘S save of what's on the note. No name yet → the library
-    /// sheet opens so the user can give it one.
+    /// Write the script back to the file it was opened from.
+    private func saveToSource(_ url: URL) {
+        do {
+            try script.write(to: url, atomically: true, encoding: .utf8)
+            flash("Saved “\(url.lastPathComponent)”")
+        } catch {
+            flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
+        }
+    }
+
+    /// One-click / ⌘S save of what's on the note. Scripts opened from a file
+    /// save back to that file; otherwise the library. No name yet → the
+    /// library sheet opens so the user can give it one.
     func saveCurrentScript() {
+        if let u = sourceURL { saveToSource(u); return }
         let n = scriptName.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty else { editing = true; return }
         saveScript(n, text: script)
@@ -297,7 +329,9 @@ final class PrompterModel: NSObject, ObservableObject {
     // MARK: edit / live mode
 
     func goLive() {
-        if !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
+        if let u = sourceURL {
+            try? script.write(to: u, atomically: true, encoding: .utf8)   // keep source file in sync
+        } else if !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
             saveScript(scriptName, text: script)   // keep library file in sync
         }
         rebuild(resetPos: false)
@@ -603,6 +637,7 @@ struct ContentView: View {
             Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
                 .frame(width: 64)
                 .help("Background transparency")
+            ctl("folder", help: "Open a text file as the script") { m.openScriptFile() }
             ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
             ctl("books.vertical", help: "Script library — save, load, delete") { m.editing = true }
             Button { m.goLive() } label: {
@@ -765,7 +800,10 @@ struct EditorView: View {
                     .controlSize(.small)
                     Button("Open file…") {
                         guard confirmDiscard() else { return }
-                        m.openScriptFile()
+                        // close the sheet before running the open panel —
+                        // state set while both modals unwind gets dropped
+                        m.editing = false
+                        DispatchQueue.main.async { m.openScriptFile() }
                     }
                     .controlSize(.small)
                     .help("Use a single text file from anywhere as the script")
@@ -794,7 +832,9 @@ struct EditorView: View {
                             if nameOK { m.saveScript(name, text: draft) }
                             m.scriptName = nameOK ? name : ""
                             m.script = draft
+                            m.sourceURL = nil   // library owns the script again
                             m.rebuild()
+                            m.persist()
                             m.editing = false
                         }
                         .keyboardShortcut(.defaultAction)
@@ -1077,6 +1117,18 @@ func runSelfTest() {
     m.saveCurrentScript()
     expectBool("quick save without name opens library", m.editing, true)
     m.editing = false
+    // script opened from an external file saves back in place
+    let ext = tmp.appendingPathComponent("external.txt")
+    try? "original".write(to: ext, atomically: true, encoding: .utf8)
+    m.sourceURL = ext
+    m.script = "edited body"
+    m.saveCurrentScript()
+    expectBool("source file save-back", (try? String(contentsOf: ext, encoding: .utf8)) == "edited body", true)
+    m.script = "live body"
+    m.goLive()
+    expectBool("goLive syncs source file", (try? String(contentsOf: ext, encoding: .utf8)) == "live body", true)
+    m.enterEdit()
+    m.sourceURL = nil
     m.setLibraryDir(PrompterModel.defaultScriptsDir)
     try? FileManager.default.removeItem(at: tmp)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
