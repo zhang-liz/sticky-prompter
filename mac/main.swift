@@ -3,6 +3,7 @@ import SwiftUI
 import Speech
 import AVFoundation
 import Combine
+import UniformTypeIdentifiers
 
 // MARK: - Text utilities
 
@@ -193,6 +194,31 @@ final class PrompterModel: NSObject, ObservableObject {
         try? FileManager.default.createDirectory(at: libraryDir, withIntermediateDirectories: true)
         try? text.write(to: scriptURL(name), atomically: true, encoding: .utf8)
         refreshSavedNames()
+    }
+
+    /// Pick a single text file anywhere on disk and use it as the script
+    /// right away. The next save writes a copy into the library folder.
+    func openScriptFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.text]
+        panel.message = "Choose a text file to use as your script."
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var enc = String.Encoding.utf8
+        guard let text = (try? String(contentsOf: url, usedEncoding: &enc))
+                ?? (try? String(contentsOf: url, encoding: .utf8)) else {
+            flash("⚠️ Couldn't read “\(url.lastPathComponent)”")
+            return
+        }
+        script = text
+        scriptName = url.deletingPathExtension().lastPathComponent
+        rebuild()
+        persist()
+        editing = false
+        flash("Opened “\(scriptName)”")
     }
 
     /// One-click / ⌘S save of what's on the note. No name yet → the library
@@ -730,12 +756,19 @@ struct EditorView: View {
                     .help(m.libraryDir.path)
                     HStack(spacing: 6) {
                         Button("Choose folder…") { m.chooseLibraryFolder() }
+                            .help("Switch the library to another folder")
                         if !m.usingDefaultLibrary {
                             Button("Default") { m.setLibraryDir(PrompterModel.defaultScriptsDir) }
                                 .help("Back to the built-in library folder")
                         }
                     }
                     .controlSize(.small)
+                    Button("Open file…") {
+                        guard confirmDiscard() else { return }
+                        m.openScriptFile()
+                    }
+                    .controlSize(.small)
+                    .help("Use a single text file from anywhere as the script")
                 }
                 .frame(width: 175)
 
