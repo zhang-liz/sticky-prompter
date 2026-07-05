@@ -611,7 +611,7 @@ struct ContentView: View {
     var footer: some View {
         VStack(spacing: 0) {
             if m.status.isEmpty && !m.listening {
-                Text("space = mic · double-click = edit")
+                Text("space = mic · esc = edit")
                     .font(.system(size: 10))
                     .foregroundColor(mainColor.opacity(0.4))
                     .lineLimit(1)
@@ -933,9 +933,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self, !self.model.editing else { return ev }
             // only shortcuts aimed at the note itself (not the color panel etc.)
             guard ev.window === self.panel else { return ev }
-            // Esc in edit mode commits and goes live, even while typing
-            if ev.keyCode == 53, !self.model.live {
-                self.model.goLive()
+            // Esc toggles the mode: edit commits and goes live (even while
+            // typing), live drops back to edit
+            if ev.keyCode == 53 {
+                self.model.live ? self.model.enterEdit() : self.model.goLive()
                 return nil
             }
             // ⌘S saves the current script, even while typing
