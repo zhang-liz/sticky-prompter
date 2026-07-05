@@ -39,7 +39,22 @@ func near(_ a: String, _ b: String) -> Bool {
 // MARK: - Model
 
 struct Token { let text: String; let norm: String }
-struct Row: Identifiable { let id: Int; let range: Range<Int>; let newPara: Bool }
+struct Row: Identifiable {
+    let id: Int; let range: Range<Int>; let newPara: Bool
+    var heading = false   // markdown heading — rendered bigger and bold
+}
+
+/// Strip inline markdown so the syntax is neither shown nor expected
+/// to be spoken: emphasis/code markers go, [label](url) keeps the label,
+/// list dashes become bullets.
+func stripInlineMarkdown(_ line: String) -> String {
+    var t = line
+    t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+    for marker in ["**", "__", "*", "`"] { t = t.replacingOccurrences(of: marker, with: "") }
+    if t.hasPrefix("- ") { t = "• " + t.dropFirst(2) }
+    if t.hasPrefix("> ") { t = String(t.dropFirst(2)) }
+    return t
+}
 
 /// Does this raw word end a sentence? (ignoring trailing quotes/brackets)
 func endsSentence(_ raw: String) -> Bool {
@@ -221,24 +236,52 @@ final class PrompterModel: NSObject, ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.text]
-        panel.message = "Choose a text file to use as your script."
+        panel.allowedContentTypes = [.text] + Self.wordTypes
+        panel.message = "Choose a text or Word file to use as your script."
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        var enc = String.Encoding.utf8
-        guard let text = (try? String(contentsOf: url, usedEncoding: &enc))
-                ?? (try? String(contentsOf: url, encoding: .utf8)) else {
+        let isWord = Self.isWordFile(url)
+        guard let text = Self.readScriptFile(url) else {
             flash("⚠️ Couldn't read “\(url.lastPathComponent)”")
             return
         }
         script = text
         scriptName = url.deletingPathExtension().lastPathComponent
-        sourceURL = url
+        // Word files are import-only: writing back would wipe their styling
+        sourceURL = isWord ? nil : url
         rebuild()
         persist()
         editing = false
         live = false   // land in the edit interface with the file loaded
-        flash("Opened “\(url.lastPathComponent)”")
+        flash(isWord ? "Opened “\(url.lastPathComponent)” — saves go to the library"
+                     : "Opened “\(url.lastPathComponent)”")
+    }
+
+    static let wordTypes: [UTType] = [
+        UTType("org.openxmlformats.wordprocessingml.document"),   // .docx
+        UTType("com.microsoft.word.doc"),                         // legacy .doc
+    ].compactMap { $0 }
+
+    static func isWordFile(_ url: URL) -> Bool {
+        ["docx", "doc"].contains(url.pathExtension.lowercased())
+    }
+
+    /// Read a script file: Word documents via AppKit's importer, text files
+    /// with encoding detection; line endings normalized to \n.
+    static func readScriptFile(_ url: URL) -> String? {
+        var text: String?
+        if isWordFile(url) {
+            text = (try? NSAttributedString(
+                url: url, options: [:], documentAttributes: nil))?.string
+        } else {
+            var enc = String.Encoding.utf8
+            text = (try? String(contentsOf: url, usedEncoding: &enc))
+                ?? (try? String(contentsOf: url, encoding: .utf8))
+                ?? (try? String(contentsOf: url, encoding: .isoLatin1))
+        }
+        return text?
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
     }
 
     /// Write the script back to the file it was opened from.
@@ -281,11 +324,27 @@ final class PrompterModel: NSObject, ObservableObject {
         refreshSavedNames()
     }
 
+    /// Markdown scripts get headings and syntax stripping in live mode
+    var isMarkdown: Bool {
+        ["md", "markdown"].contains(sourceURL?.pathExtension.lowercased() ?? "")
+    }
+
     func rebuild(resetPos: Bool = true) {
         tokens = []
         rows = []
         var rid = 0
-        for line in script.components(separatedBy: "\n") {
+        let md = isMarkdown
+        for rawLine in script.components(separatedBy: "\n") {
+            var line = rawLine
+            var heading = false
+            if md {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("#") {
+                    heading = true
+                    line = String(trimmed.drop(while: { $0 == "#" }))
+                }
+                line = stripInlineMarkdown(line)
+            }
             let words = line.split(separator: " ").map(String.init).filter { !$0.isEmpty }
             if words.isEmpty { continue }
             var start = tokens.count
@@ -302,14 +361,14 @@ final class PrompterModel: NSObject, ObservableObject {
                 // close the row at sentence-final punctuation so scrolling can
                 // pin the sentence being read to the top edge of the window
                 if endsSentence(w), tokens.count > start {
-                    rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara))
+                    rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara, heading: heading))
                     rid += 1
                     start = tokens.count
                     newPara = false
                 }
             }
             if tokens.count > start {
-                rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara))
+                rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara, heading: heading))
                 rid += 1
             }
         }
@@ -547,7 +606,8 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
                     ForEach(m.rows) { r in
                         Text(attributed(r))
-                            .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
+                            .font(.system(size: r.heading ? m.fontSize * 1.2 : m.fontSize,
+                                          weight: r.heading ? .bold : .medium, design: .rounded))
                             .lineSpacing(m.fontSize * 0.35)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
@@ -1042,6 +1102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 func runSelfTest() {
     let m = PrompterModel()
     m.persistEnabled = false   // never touch the user's saved script/settings
+    m.sourceURL = nil          // ignore any source file restored from defaults
     m.script = PrompterModel.sample
     m.rebuild()
     var fails = 0
@@ -1128,6 +1189,31 @@ func runSelfTest() {
     m.goLive()
     expectBool("goLive syncs source file", (try? String(contentsOf: ext, encoding: .utf8)) == "live body", true)
     m.enterEdit()
+    m.sourceURL = nil
+    // file reading: legacy encoding + CR line endings normalize to \n
+    let legacy = tmp.appendingPathComponent("legacy.txt")
+    try? Data([0x63, 0x61, 0x66, 0xE9, 0x0D, 0x68, 0x69]).write(to: legacy)   // "café\rhi" in latin-1
+    expectBool("legacy txt read", PrompterModel.readScriptFile(legacy) == "café\nhi", true)
+    // Word import (docx generated with textutil)
+    let txtSrc = tmp.appendingPathComponent("w.txt")
+    let docx = tmp.appendingPathComponent("w.docx")
+    try? "word doc body".write(to: txtSrc, atomically: true, encoding: .utf8)
+    let conv = Process()
+    conv.executableURL = URL(fileURLWithPath: "/usr/bin/textutil")
+    conv.arguments = ["-convert", "docx", txtSrc.path, "-output", docx.path]
+    try? conv.run(); conv.waitUntilExit()
+    expectBool("docx import", PrompterModel.readScriptFile(docx)?.contains("word doc body") == true, true)
+    // markdown: headings styled, syntax stripped, speech still matches
+    let mdFile = tmp.appendingPathComponent("t.md")
+    try? "x".write(to: mdFile, atomically: true, encoding: .utf8)
+    m.sourceURL = mdFile
+    m.script = "# Big Title\nSay **hello** to [world](http://x)."
+    m.rebuild()
+    expectBool("md heading flagged", m.rows.first?.heading == true, true)
+    expectBool("md syntax stripped",
+               !m.tokens.contains { $0.text.contains("**") || $0.text.contains("#") || $0.text.contains("](") }, true)
+    m.handleTranscript(["big", "title", "say", "hello", "to", "world"], isFinal: true)
+    expectBool("md speech matches", m.pos == m.tokens.count, true)
     m.sourceURL = nil
     m.setLibraryDir(PrompterModel.defaultScriptsDir)
     try? FileManager.default.removeItem(at: tmp)
