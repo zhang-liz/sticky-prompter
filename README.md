@@ -18,7 +18,7 @@ It listens as you speak and follows along with your script — no scrolling, no 
 <p align="center">
   <a href="https://github.com/zhang-liz/sticky-prompter/releases/latest/download/StickyPrompter.dmg"><b>⬇️&nbsp; Download for macOS</b></a>
   &nbsp;·&nbsp;
-  <a href="web/">Web version</a>
+  <a href="https://zhang-liz.github.io/sticky-prompter/"><b>▶️&nbsp; Try it in your browser</b></a>
 </p>
 
 ---
@@ -62,9 +62,16 @@ That's it — launch **Sticky Prompter** from Spotlight. Details in [`mac/README
 
 </details>
 
-### Web (any OS, no install)
+### Web (any OS, nothing to install)
 
-Runs in Chrome or Edge straight from the repo — no build step, no dependencies:
+**[Open the web version →](https://zhang-liz.github.io/sticky-prompter/)** in Chrome or Edge, then use the pop-out button for an always-on-top floating note. It can't be hidden from screen shares or made transparent like the macOS app — see [`web/README.md`](web/README.md) for the full comparison.
+
+<details>
+<summary><b>Run it locally instead</b></summary>
+
+<br>
+
+It's a single HTML file with no build step and no dependencies:
 
 ```bash
 git clone https://github.com/zhang-liz/sticky-prompter.git
@@ -72,7 +79,9 @@ cd sticky-prompter/web
 python3 -m http.server 4173
 ```
 
-Open **http://localhost:4173** in Chrome, then use the pop-out button for an always-on-top floating note. It can't be hidden from screen shares or made transparent like the macOS app — see [`web/README.md`](web/README.md) for the full comparison.
+Open **http://localhost:4173** in Chrome.
+
+</details>
 
 ## Quick start
 
