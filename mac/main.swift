@@ -60,6 +60,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var bgB: Double
     @Published var listening = false
     @Published var editing = false
+    @Published var live = false
     @Published var status = ""
     @Published var clickThrough = false
 
@@ -160,7 +161,7 @@ final class PrompterModel: NSObject, ObservableObject {
         refreshSavedNames()
     }
 
-    func rebuild() {
+    func rebuild(resetPos: Bool = true) {
         tokens = []
         rows = []
         var rid = 0
@@ -199,10 +200,25 @@ final class PrompterModel: NSObject, ObservableObject {
             .filter { $0.count >= 3 && seen.insert($0).inserted }
             .sorted { $0.count > $1.count }
         if vocab.count > 100 { vocab = Array(vocab.prefix(100)) }
-        pos = 0
-        anchor = 0
+        pos = resetPos ? 0 : min(pos, tokens.count)
+        anchor = pos
         pending = []
         persist()
+    }
+
+    // MARK: edit / live mode
+
+    func goLive() {
+        if !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
+            saveScript(scriptName, text: script)   // keep library file in sync
+        }
+        rebuild(resetPos: false)
+        live = true
+    }
+
+    func enterEdit() {
+        if listening { stopListening() }
+        live = false
     }
 
     var currentRowID: Int {
@@ -740,6 +756,26 @@ func runSelfTest() {
     m.jump(to: 30)
     m.handleTranscript(["end", "of", "this", "video"], isFinal: false)
     expect("resume after jump", m.pos, 36)
+    // rebuild(resetPos: false) clamps instead of resetting
+    m.jump(to: 30)
+    m.script = "Hey everyone, welcome back."
+    m.rebuild(resetPos: false)
+    expect("edit clamps pos", m.pos, 4)
+    m.script = PrompterModel.sample
+    m.rebuild()
+    expect("plain rebuild resets", m.pos, 0)
+    // goLive commits + keeps clamped position; enterEdit stops listening
+    m.jump(to: 5)
+    m.goLive()
+    expect("goLive keeps pos", m.pos, 5)
+    func expectBool(_ name: String, _ got: Bool, _ want: Bool) {
+        let ok = got == want
+        if !ok { fails += 1 }
+        print("\(ok ? "PASS" : "FAIL") \(name)")
+    }
+    expectBool("goLive sets live", m.live, true)
+    m.enterEdit()
+    expectBool("enterEdit clears live", m.live, false)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
     exit(fails == 0 ? 0 : 1)
 }
