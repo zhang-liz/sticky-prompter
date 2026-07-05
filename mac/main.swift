@@ -83,6 +83,9 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var captureHidden = true
     @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
     @Published var sourceURL: URL?   // external file the script came from; saves write back to it
+    @Published var panelIsKey = true // live-mode shortcuts only work while the note is key
+    var sourceBaseline: String?      // file content at last load/save — detects external edits
+    var alertsEnabled = true         // selftest runs headless; treat alerts as "cancel"
 
     var tokens: [Token] = []
     var rows: [Row] = []
@@ -100,6 +103,7 @@ final class PrompterModel: NSObject, ObservableObject {
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Timer?
     private var taskGen = 0   // stale-task guard: cancelled tasks still fire callbacks
+    private var consecutiveErrors = 0
     private var persistSub: AnyCancellable?
 
     override init() {
@@ -125,8 +129,19 @@ final class PrompterModel: NSObject, ObservableObject {
                 libraryDir = URL(fileURLWithPath: path, isDirectory: true)
             }   // folder gone → stay on the default library
         }
-        if let path = d.string(forKey: "sourceURL"), FileManager.default.fileExists(atPath: path) {
-            sourceURL = URL(fileURLWithPath: path)
+        if let path = d.string(forKey: "sourceURL") {
+            if FileManager.default.fileExists(atPath: path) {
+                let url = URL(fileURLWithPath: path)
+                sourceURL = url
+                // the file is the source of truth: adopt whatever is on disk
+                // so a copy staled in defaults can never clobber it
+                if let disk = PrompterModel.readScriptFile(url) {
+                    script = disk
+                    sourceBaseline = disk
+                }
+            } else {
+                status = "⚠️ Original file moved or deleted — script kept, saves go to the library"
+            }
         }
         super.init()
         rebuild()
@@ -183,12 +198,17 @@ final class PrompterModel: NSObject, ObservableObject {
         return libraryDir.appendingPathComponent(safe + ".txt")
     }
 
+    // display name → actual file URL, so names with sanitized characters
+    // (":" or "/") still load and delete the right file
+    private var savedURLs: [String: URL] = [:]
+
     func refreshSavedNames() {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: libraryDir, includingPropertiesForKeys: nil)) ?? []
-        savedNames = urls
+        savedURLs = Dictionary(uniqueKeysWithValues: urls
             .filter { $0.pathExtension == "txt" }
-            .map { $0.deletingPathExtension().lastPathComponent }
+            .map { ($0.deletingPathExtension().lastPathComponent, $0) })
+        savedNames = savedURLs.keys
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
@@ -212,33 +232,49 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
-    func saveScript(_ name: String, text: String) {
+    @discardableResult
+    func saveScript(_ name: String, text: String) -> Bool {
         try? FileManager.default.createDirectory(at: libraryDir, withIntermediateDirectories: true)
-        try? text.write(to: scriptURL(name), atomically: true, encoding: .utf8)
-        refreshSavedNames()
+        let url = savedURLs[name] ?? scriptURL(name)
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            refreshSavedNames()
+            return true
+        } catch {
+            refreshSavedNames()
+            return false
+        }
     }
 
     /// Pick a single text file anywhere on disk and use it as the script
     /// right away. Saves write back to that file until a library script
     /// takes over.
+    /// True when what's on the note isn't safely stored anywhere.
+    var noteHasUnsavedChanges: Bool {
+        let text = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return false }
+        if let base = sourceBaseline, sourceURL != nil { return script != base }
+        let n = scriptName.trimmingCharacters(in: .whitespaces)
+        if n.isEmpty { return true }
+        return loadScript(n) != script
+    }
+
     func openScriptFile() {
         // the current script would have no way back once replaced — ask
-        if sourceURL == nil,
-           scriptName.trimmingCharacters(in: .whitespaces).isEmpty,
-           !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if noteHasUnsavedChanges {
             let a = NSAlert()
             a.messageText = "Replace the current script?"
-            a.informativeText = "What's on the note isn't saved to the library."
+            a.informativeText = "The note has changes that aren't saved anywhere yet."
             a.addButton(withTitle: "Replace")
             a.addButton(withTitle: "Cancel")
-            guard a.runModal() == .alertFirstButtonReturn else { return }
+            guard !alertsEnabled || a.runModal() == .alertFirstButtonReturn else { return }
         }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.text] + Self.wordTypes
-        panel.message = "Choose a text or Word file to use as your script."
+        panel.allowedContentTypes = Self.openableTypes
+        panel.message = "Choose a text, Markdown, RTF or Word file to use as your script."
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let text = Self.readScriptFile(url) else {
@@ -247,13 +283,17 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         script = text
         scriptName = url.deletingPathExtension().lastPathComponent
-        sourceURL = url
+        // RTF/HTML are import-only (writing plain text back would corrupt them)
+        let importOnly = Self.isRichTextFile(url)
+        sourceURL = importOnly ? nil : url
+        sourceBaseline = importOnly ? nil : text
         wordSaveApproved = false   // re-ask before overwriting a Word file
         rebuild()
         persist()
         editing = false
         live = false   // land in the edit interface with the file loaded
-        flash("Opened “\(url.lastPathComponent)”")
+        flash(importOnly ? "Opened “\(url.lastPathComponent)” — saves go to the library"
+                         : "Opened “\(url.lastPathComponent)”")
     }
 
     /// Overwriting a Word file flattens its styling — ask once per opened doc.
@@ -264,15 +304,23 @@ final class PrompterModel: NSObject, ObservableObject {
         UTType("com.microsoft.word.doc"),                         // legacy .doc
     ].compactMap { $0 }
 
+    static let openableTypes: [UTType] =
+        [.plainText, .rtf, UTType("net.daring-fireball.markdown")].compactMap { $0 } + wordTypes
+
     static func isWordFile(_ url: URL) -> Bool {
         ["docx", "doc"].contains(url.pathExtension.lowercased())
     }
 
-    /// Read a script file: Word documents via AppKit's importer, text files
-    /// with encoding detection; line endings normalized to \n.
+    static func isRichTextFile(_ url: URL) -> Bool {
+        ["rtf", "rtfd", "html", "htm"].contains(url.pathExtension.lowercased())
+    }
+
+    /// Read a script file: Word/RTF via AppKit's importer (so markup never
+    /// lands on the note as raw text), text files with encoding detection;
+    /// line endings normalized to \n.
     static func readScriptFile(_ url: URL) -> String? {
         var text: String?
-        if isWordFile(url) {
+        if isWordFile(url) || isRichTextFile(url) {
             text = ((try? NSAttributedString(
                 url: url, options: [:], documentAttributes: nil))?.string)
                 .map(sanitizeWordImport)
@@ -314,8 +362,26 @@ final class PrompterModel: NSObject, ObservableObject {
             .joined(separator: "\n")
     }
 
+    /// The file changed on disk since we last read or wrote it.
+    private func sourceChangedExternally(_ url: URL) -> Bool {
+        guard let base = sourceBaseline,
+              let disk = Self.readScriptFile(url) else { return false }
+        return disk != base && disk != script
+    }
+
     /// Write the script back to the file it was opened from.
     private func saveToSource(_ url: URL) {
+        if sourceChangedExternally(url) {
+            let a = NSAlert()
+            a.messageText = "“\(url.lastPathComponent)” changed outside Sticky Prompter"
+            a.informativeText = "Saving will overwrite those outside changes with the note's version."
+            a.addButton(withTitle: "Overwrite")
+            a.addButton(withTitle: "Cancel")
+            guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else {
+                flash("⚠️ Not saved — “\(url.lastPathComponent)” changed on disk")
+                return
+            }
+        }
         if Self.isWordFile(url) {
             if !wordSaveApproved {
                 let a = NSAlert()
@@ -323,15 +389,20 @@ final class PrompterModel: NSObject, ObservableObject {
                 a.informativeText = "Sticky Prompter writes plain text — the document's original fonts, images and layout won't be kept."
                 a.addButton(withTitle: "Save")
                 a.addButton(withTitle: "Cancel")
-                guard a.runModal() == .alertFirstButtonReturn else { return }
+                guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else { return }
                 wordSaveApproved = true
             }
-            flash(writeWordFile(url) ? "Saved “\(url.lastPathComponent)”"
-                                     : "⚠️ Couldn't save “\(url.lastPathComponent)”")
+            if writeWordFile(url) {
+                sourceBaseline = script
+                flash("Saved “\(url.lastPathComponent)”")
+            } else {
+                flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
+            }
             return
         }
         do {
             try script.write(to: url, atomically: true, encoding: .utf8)
+            sourceBaseline = script
             flash("Saved “\(url.lastPathComponent)”")
         } catch {
             flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
@@ -344,9 +415,13 @@ final class PrompterModel: NSObject, ObservableObject {
     func saveCurrentScript() {
         if let u = sourceURL { saveToSource(u); return }
         let n = scriptName.trimmingCharacters(in: .whitespaces)
-        guard !n.isEmpty else { editing = true; return }
-        saveScript(n, text: script)
-        flash("Saved “\(n)”")
+        guard !n.isEmpty else {
+            flash("Name the script to save it")
+            editing = true
+            return
+        }
+        flash(saveScript(n, text: script) ? "Saved “\(n)”"
+                                          : "⚠️ Couldn't save “\(n)” — check the library folder")
     }
 
     private var statusClear: Timer?
@@ -359,12 +434,12 @@ final class PrompterModel: NSObject, ObservableObject {
     }
 
     func loadScript(_ name: String) -> String? {
-        try? String(contentsOf: scriptURL(name), encoding: .utf8)
+        try? String(contentsOf: savedURLs[name] ?? scriptURL(name), encoding: .utf8)
     }
 
     func deleteScript(_ name: String) {
         // move to Trash rather than deleting outright
-        try? FileManager.default.trashItem(at: scriptURL(name), resultingItemURL: nil)
+        try? FileManager.default.trashItem(at: savedURLs[name] ?? scriptURL(name), resultingItemURL: nil)
         refreshSavedNames()
     }
 
@@ -432,11 +507,21 @@ final class PrompterModel: NSObject, ObservableObject {
     // MARK: edit / live mode
 
     func goLive() {
+        guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            flash("Type or open a script first")
+            return
+        }
         if let u = sourceURL {
-            if Self.isWordFile(u) {
-                if wordSaveApproved { writeWordFile(u) }   // never silently flatten a Word doc
-            } else {
-                try? script.write(to: u, atomically: true, encoding: .utf8)   // keep source file in sync
+            // silent background sync: never prompt mid-go-live, never write
+            // over external edits, never flatten an unapproved Word doc
+            if sourceChangedExternally(u) {
+                flash("⚠️ “\(u.lastPathComponent)” changed on disk — ⌘S to review")
+            } else if Self.isWordFile(u) {
+                if wordSaveApproved, writeWordFile(u) { sourceBaseline = script }
+            } else if script != sourceBaseline {
+                if (try? script.write(to: u, atomically: true, encoding: .utf8)) != nil {
+                    sourceBaseline = script
+                }
             }
         } else if !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
             saveScript(scriptName, text: script)   // keep library file in sync
@@ -452,7 +537,7 @@ final class PrompterModel: NSObject, ObservableObject {
         guard let data = try? attr.data(
                 from: NSRange(location: 0, length: attr.length),
                 documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML]),
-              (try? data.write(to: url)) != nil else { return false }
+              (try? data.write(to: url, options: .atomic)) != nil else { return false }
         return true
     }
 
@@ -509,13 +594,19 @@ final class PrompterModel: NSObject, ObservableObject {
 
     /// Recompute the whole utterance from its anchor — the recognizer keeps
     /// revising earlier partial words, so incremental consumption drifts.
+    private var announcedEnd = false
+
     func handleTranscript(_ words: [String], isFinal: Bool) {
         pos = anchor
         pending = []
         for w in words { consume(w) }
         if isFinal { anchor = pos }
-        if pos >= tokens.count && !tokens.isEmpty { status = "🎉 End of script" }
-        else if listening { status = "…" + words.suffix(6).joined(separator: " ") }
+        if pos >= tokens.count && !tokens.isEmpty {
+            if !announcedEnd { announcedEnd = true; flash("🎉 End of script") }
+        } else {
+            announcedEnd = false
+            if listening { status = "…" + words.suffix(6).joined(separator: " ") }
+        }
     }
 
     func jump(to i: Int) {
@@ -564,6 +655,7 @@ final class PrompterModel: NSObject, ObservableObject {
         listening = true
         anchor = pos
         pending = []
+        consecutiveErrors = 0
         status = "Listening…"
         startTask(rec)
     }
@@ -583,12 +675,21 @@ final class PrompterModel: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self, self.listening, gen == self.taskGen else { return }
                 if let r = result {
+                    self.consecutiveErrors = 0
                     let words = r.bestTranscription.segments.map { $0.substring }
                     self.handleTranscript(words, isFinal: r.isFinal)
                     self.scheduleSilenceRollover()
                     if r.isFinal { self.restartRecognition() }
                 } else if error != nil {
-                    self.restartRecognition()
+                    // an immediately-failing recognizer (offline, throttled)
+                    // would otherwise spin in a restart loop
+                    self.consecutiveErrors += 1
+                    if self.consecutiveErrors >= 4 {
+                        self.stopListening()
+                        self.status = "⚠️ Speech recognition unavailable — try the mic again later"
+                    } else {
+                        self.restartRecognition()
+                    }
                 }
             }
         }
@@ -642,6 +743,7 @@ struct ContentView: View {
     var bgColor: Color { Color(red: m.bgR, green: m.bgG, blue: m.bgB).opacity(m.bgOpacity) }
     var hiBG: Color { isLightBG ? Color(red: 1.0, green: 0.47, blue: 0.16) : Color(red: 0.97, green: 0.79, blue: 0.28) }
     var hiFG: Color { isLightBG ? .white : Color(red: 0.13, green: 0.10, blue: 0.0) }
+    var scriptEmpty: Bool { m.script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -745,8 +847,9 @@ struct ContentView: View {
                 .font(.system(size: 10, weight: .bold))
                 .kerning(1)
                 .lineLimit(1)
+                .layoutPriority(1)   // don't let the controls squeeze the name to one letter
                 .foregroundColor(mainColor.opacity(0.5))
-            Spacer()
+            Spacer(minLength: 6)
             ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
             ctl("textformat.size.larger", help: "Bigger text") { m.fontSize = min(48, m.fontSize + 2); m.persist() }
             ColorPicker("", selection: bgBinding)
@@ -765,12 +868,13 @@ struct ContentView: View {
                     .fixedSize()
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(hiBG)
-                    .foregroundColor(hiFG)
+                    .background(hiBG.opacity(scriptEmpty ? 0.35 : 1))
+                    .foregroundColor(hiFG.opacity(scriptEmpty ? 0.5 : 1))
                     .cornerRadius(6)
             }
             .buttonStyle(.plain)
-            .help("Start prompting (Esc)")
+            .disabled(scriptEmpty)
+            .help(scriptEmpty ? "Type or open a script first" : "Start prompting (Esc)")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -791,7 +895,7 @@ struct ContentView: View {
     var footer: some View {
         VStack(spacing: 0) {
             if m.status.isEmpty && !m.listening {
-                Text("space = mic · esc = edit")
+                Text(m.panelIsKey ? "space = mic · esc = edit" : "click the note first, then space = mic")
                     .font(.system(size: 10))
                     .foregroundColor(mainColor.opacity(0.4))
                     .lineLimit(1)
@@ -832,9 +936,33 @@ struct EditorView: View {
     @ObservedObject var m: PrompterModel
     @State private var draft = ""
     @State private var name = ""
-    @State private var snapshot = ""   // editor contents at last load/save
+    @State private var snapshot = ""     // editor contents at last load/save
+    @State private var loadedName = ""   // library script the draft came from
 
     var nameOK: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// Saving under a name the user didn't just load overwrites that script.
+    func confirmOverwrite() -> Bool {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        guard n != loadedName, m.savedNames.contains(n) else { return true }
+        let a = NSAlert()
+        a.messageText = "Replace the script “\(n)”?"
+        a.informativeText = "A script with this name is already in the library."
+        a.addButton(withTitle: "Replace")
+        a.addButton(withTitle: "Cancel")
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Using a library script stops saves from going to an opened file.
+    func confirmDetachSource() -> Bool {
+        guard let u = m.sourceURL else { return true }
+        let a = NSAlert()
+        a.messageText = "Stop saving to “\(u.lastPathComponent)”?"
+        a.informativeText = "The note will switch to this library script; the file keeps its current contents."
+        a.addButton(withTitle: "Switch")
+        a.addButton(withTitle: "Cancel")
+        return a.runModal() == .alertFirstButtonReturn
+    }
 
     /// True when it's fine to replace the editor contents (nothing typed,
     /// or the user confirms discarding what's there).
@@ -869,7 +997,7 @@ struct EditorView: View {
                                 HStack(spacing: 4) {
                                     Button {
                                         guard confirmDiscard() else { return }
-                                        if let t = m.loadScript(n) { draft = t; name = n; snapshot = t }
+                                        if let t = m.loadScript(n) { draft = t; name = n; snapshot = t; loadedName = n }
                                     } label: {
                                         HStack(spacing: 5) {
                                             Image(systemName: "doc.text")
@@ -940,18 +1068,34 @@ struct EditorView: View {
                         .frame(minWidth: 380, minHeight: 300)
                     HStack {
                         Button("New") {
-                            if confirmDiscard() { draft = ""; name = ""; snapshot = "" }
+                            if confirmDiscard() { draft = ""; name = ""; snapshot = ""; loadedName = "" }
                         }
                         .help("Start a blank script")
-                        Button("Save to library") { m.saveScript(name, text: draft); snapshot = draft }
-                            .disabled(!nameOK)
+                        Button("Save to library") {
+                            guard confirmOverwrite() else { return }
+                            if m.saveScript(name, text: draft) {
+                                snapshot = draft
+                                loadedName = name.trimmingCharacters(in: .whitespaces)
+                            } else {
+                                let a = NSAlert()
+                                a.messageText = "Couldn't save “\(name)”"
+                                a.informativeText = "Check that the library folder still exists and is writable."
+                                a.runModal()
+                            }
+                        }
+                        .disabled(!nameOK)
                         Spacer()
-                        Button("Cancel") { m.editing = false }
+                        Button("Cancel") {
+                            guard confirmDiscard() else { return }
+                            m.editing = false
+                        }
                         Button("Use script") {
+                            guard confirmDetachSource(), nameOK ? confirmOverwrite() : true else { return }
                             if nameOK { m.saveScript(name, text: draft) }
                             m.scriptName = nameOK ? name : ""
                             m.script = draft
                             m.sourceURL = nil   // library owns the script again
+                            m.sourceBaseline = nil
                             m.rebuild()
                             m.persist()
                             m.editing = false
@@ -963,7 +1107,11 @@ struct EditorView: View {
         }
         .padding(16)
         .frame(minWidth: 640, minHeight: 400)
-        .onAppear { draft = m.script; name = m.scriptName; snapshot = m.script }
+        .onAppear {
+            m.refreshSavedNames()   // pick up files added/removed in Finder
+            draft = m.script; name = m.scriptName; snapshot = m.script
+            loadedName = m.scriptName
+        }
     }
 }
 
@@ -988,12 +1136,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.hidesOnDeactivate = false
         p.isFloatingPanel = true
         p.becomesKeyOnlyIfNeeded = true
+        p.isReleasedWhenClosed = false   // we keep a strong ref; closing only hides
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
         // invisible in screen recordings & screen shares (persisted preference)
         p.sharingType = model.captureHidden ? .none : .readOnly
         p.contentView = NSHostingView(rootView: ContentView(m: model))
+        p.contentMinSize = NSSize(width: 420, height: 220)   // keep the edit bar readable
         p.setFrameAutosaveName("StickyPrompterWindow")
         if p.frame.origin == .zero {
             if let screen = NSScreen.main {
@@ -1004,6 +1154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.makeKeyAndOrderFront(nil)
         panel = p
 
+        setupMainMenu()
         setupStatusItem()
         setupKeys()
         model.$live
@@ -1011,9 +1162,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] live in self?.applyMode(live: live) }
             .store(in: &subs)
         applyMode(live: model.live)
+        // live-mode shortcuts only reach us while the note is the key window —
+        // let the UI say so instead of silently typing spaces into Zoom
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: p, queue: .main) { [weak self] _ in
+            self?.model.panelIsKey = true
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: .main) { [weak self] _ in
+            self?.model.panelIsKey = false
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// Without a main menu, none of the standard edit shortcuts reach the
+    /// text editor — a first-time user can't even paste their script in.
+    func setupMainMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "About Sticky Prompter",
+                                   action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Hide Sticky Prompter", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Quit Sticky Prompter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appItem.submenu = appMenu
+
+        let fileItem = NSMenuItem(); main.addItem(fileItem)
+        let file = NSMenu(title: "File")
+        let openItem = NSMenuItem(title: "Open Script File…", action: #selector(openFromMenu), keyEquivalent: "o")
+        openItem.target = self
+        file.addItem(openItem)
+        let saveItem = NSMenuItem(title: "Save Script", action: #selector(saveFromMenu), keyEquivalent: "s")
+        saveItem.target = self
+        file.addItem(saveItem)
+        fileItem.submenu = file
+
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        edit.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        edit.addItem(.separator())
+        edit.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = edit
+        NSApp.mainMenu = main
+    }
+
+    @objc func openFromMenu() { model.openScriptFile() }
+    @objc func saveFromMenu() { model.saveCurrentScript() }
 
     // NEVER true: AppKit's last-window check ignores NSPanels, so it would
     // terminate the app mid-use whenever a helper window (sheet, IME palette)
@@ -1059,8 +1258,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleClickThrough(_ sender: NSMenuItem) {
         model.clickThrough.toggle()
-        panel.ignoresMouseEvents = model.clickThrough
+        // only live mode ignores the mouse — edit mode must stay clickable
+        panel.ignoresMouseEvents = model.clickThrough && model.live
         sender.state = model.clickThrough ? .on : .off
+        if model.clickThrough {
+            model.flash(model.live ? "Click-through on — control me from the menu bar note icon"
+                                   : "Click-through on — takes effect in live mode")
+        }
         model.persist()
     }
 
@@ -1104,13 +1308,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // app quits via "last window closed"). Buttons are hidden/shown instead.
         if !live {
             NSApp.activate(ignoringOtherApps: true)
-            // click-through would make editing impossible
-            if model.clickThrough {
-                model.clickThrough = false
-                model.persist()
-            }
             p.makeKeyAndOrderFront(nil)
         }
+        // click-through only ever applies in live mode; the setting itself
+        // survives mode switches and relaunches
         p.ignoresMouseEvents = live && model.clickThrough
         p.becomesKeyOnlyIfNeeded = live
         for b: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
@@ -1160,8 +1361,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 func runSelfTest() {
     let m = PrompterModel()
-    m.persistEnabled = false   // never touch the user's saved script/settings
-    m.sourceURL = nil          // ignore any source file restored from defaults
+    m.persistEnabled = false    // never touch the user's saved script/settings
+    m.sourceURL = nil           // ignore any source file restored from defaults
+    m.sourceBaseline = nil
+    m.alertsEnabled = false     // headless: every confirmation counts as Cancel
     m.script = PrompterModel.sample
     m.rebuild()
     var fails = 0
@@ -1268,6 +1471,7 @@ func runSelfTest() {
     expectBool("curly apostrophe normalized", normWord("don’t") == "don't", true)
     // Word write-back round-trips through the docx exporter
     m.sourceURL = docx
+    m.sourceBaseline = PrompterModel.readScriptFile(docx)   // as openScriptFile would
     m.wordSaveApproved = true
     m.script = "rewritten body"
     m.saveCurrentScript()
@@ -1285,6 +1489,35 @@ func runSelfTest() {
     m.handleTranscript(["big", "title", "say", "hello", "to", "world"], isFinal: true)
     expectBool("md speech matches", m.pos == m.tokens.count, true)
     m.sourceURL = nil
+    // goLive refuses an empty script
+    m.script = "   "
+    m.goLive()
+    expectBool("goLive blocks empty script", m.live, false)
+    // external edits are never clobbered
+    let shared = tmp.appendingPathComponent("shared.txt")
+    try? "mine".write(to: shared, atomically: true, encoding: .utf8)
+    m.sourceURL = shared
+    m.sourceBaseline = "mine"
+    m.script = "my edits"
+    try? "theirs".write(to: shared, atomically: true, encoding: .utf8)   // change behind the app's back
+    m.goLive()
+    expectBool("goLive keeps external edits", (try? String(contentsOf: shared, encoding: .utf8)) == "theirs", true)
+    m.enterEdit()
+    m.saveCurrentScript()   // alert suppressed → cancel
+    expectBool("save keeps external edits without consent", (try? String(contentsOf: shared, encoding: .utf8)) == "theirs", true)
+    m.sourceURL = nil
+    m.sourceBaseline = nil
+    // library names with sanitized characters map to the right file
+    try? "colon body".write(to: tmp.appendingPathComponent("a:b.txt"), atomically: true, encoding: .utf8)
+    m.refreshSavedNames()
+    expectBool("colon name loads right file", m.loadScript("a:b") == "colon body", true)
+    // failed saves report failure
+    let lockedDir = tmp.appendingPathComponent("locked", isDirectory: true)
+    try? FileManager.default.createDirectory(at: lockedDir, withIntermediateDirectories: true)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: lockedDir.path)
+    m.setLibraryDir(lockedDir)
+    expectBool("failed save returns false", m.saveScript("x", text: "y"), false)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedDir.path)
     m.setLibraryDir(PrompterModel.defaultScriptsDir)
     try? FileManager.default.removeItem(at: tmp)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
