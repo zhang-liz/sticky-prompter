@@ -86,7 +86,7 @@ final class PrompterModel: NSObject, ObservableObject {
 
     override init() {
         let d = UserDefaults.standard
-        script = d.string(forKey: "script") ?? PrompterModel.sample
+        script = d.string(forKey: "script") ?? ""   // first launch: start blank
         scriptName = d.string(forKey: "scriptName") ?? ""
         fontSize = d.object(forKey: "fontSize") as? Double ?? 22
         bgOpacity = d.object(forKey: "bgOpacity") as? Double ?? 0.65
@@ -193,6 +193,24 @@ final class PrompterModel: NSObject, ObservableObject {
         try? FileManager.default.createDirectory(at: libraryDir, withIntermediateDirectories: true)
         try? text.write(to: scriptURL(name), atomically: true, encoding: .utf8)
         refreshSavedNames()
+    }
+
+    /// One-click / ⌘S save of what's on the note. No name yet → the library
+    /// sheet opens so the user can give it one.
+    func saveCurrentScript() {
+        let n = scriptName.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty else { editing = true; return }
+        saveScript(n, text: script)
+        flash("Saved “\(n)”")
+    }
+
+    private var statusClear: Timer?
+    func flash(_ msg: String) {
+        status = msg
+        statusClear?.invalidate()
+        statusClear = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: false) { [weak self] _ in
+            if self?.status == msg { self?.status = "" }
+        }
     }
 
     func loadScript(_ name: String) -> String? {
@@ -493,13 +511,23 @@ struct ContentView: View {
 
     // edit mode: type straight into the note
     var editor: some View {
-        TextEditor(text: $m.script)
-            .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
-            .foregroundColor(mainColor)
-            .modifier(ClearTextEditor())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .onExitCommand { m.goLive() }   // Esc commits and goes live
+        ZStack(alignment: .topLeading) {
+            if m.script.isEmpty {
+                Text("Type your script here, then Go Live.")
+                    .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
+                    .foregroundColor(mainColor.opacity(0.35))
+                    .padding(.horizontal, 17)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $m.script)
+                .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
+                .foregroundColor(mainColor)
+                .modifier(ClearTextEditor())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .onExitCommand { m.goLive() }   // Esc commits and goes live
+        }
     }
 
     func attributed(_ r: Row) -> AttributedString {
@@ -533,7 +561,8 @@ struct ContentView: View {
 
     var editBar: some View {
         HStack(spacing: 8) {
-            Text(m.scriptName.isEmpty ? "STICKY PROMPTER" : m.scriptName.uppercased())
+            Text(!m.status.isEmpty ? m.status
+                 : m.scriptName.isEmpty ? "STICKY PROMPTER" : m.scriptName.uppercased())
                 .font(.system(size: 10, weight: .bold))
                 .kerning(1)
                 .lineLimit(1)
@@ -548,6 +577,7 @@ struct ContentView: View {
             Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
                 .frame(width: 64)
                 .help("Background transparency")
+            ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
             ctl("books.vertical", help: "Script library — save, load, delete") { m.editing = true }
             Button { m.goLive() } label: {
                 Label("Go Live", systemImage: "play.fill")
@@ -908,6 +938,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.model.goLive()
                 return nil
             }
+            // ⌘S saves the current script, even while typing
+            if ev.modifierFlags.contains(.command),
+               ev.charactersIgnoringModifiers?.lowercased() == "s" {
+                self.model.saveCurrentScript()
+                return nil
+            }
             if let fr = self.panel.firstResponder, fr is NSTextView { return ev }
             guard self.model.live else { return ev }
             switch ev.charactersIgnoringModifiers?.lowercased() {
@@ -997,6 +1033,16 @@ func runSelfTest() {
     m.saveScript("Test Script", text: "hello world")
     expectBool("save lists script", m.savedNames == ["Test Script"], true)
     expectBool("load round-trips", m.loadScript("Test Script") == "hello world", true)
+    // quick save (⌘S / toolbar button)
+    m.script = "quick save body"
+    m.scriptName = "Quick"
+    m.saveCurrentScript()
+    expectBool("quick save writes named script", m.loadScript("Quick") == "quick save body", true)
+    m.editing = false
+    m.scriptName = ""
+    m.saveCurrentScript()
+    expectBool("quick save without name opens library", m.editing, true)
+    m.editing = false
     m.setLibraryDir(PrompterModel.defaultScriptsDir)
     try? FileManager.default.removeItem(at: tmp)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
