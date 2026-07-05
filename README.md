@@ -13,12 +13,12 @@ It listens as you speak and follows along with your script - no scrolling, no cl
 
 ## What it does
 
-- 🎤 **Voice tracking** - read your script and the highlight follows you, word by word. Pause, ad-lib, or skip a sentence and it catches up.
-- 📌 **Always on top** - the note floats over Zoom, Meet, FaceTime, OBS, and full-screen apps. Park it right under your camera so your eyes stay near the lens.
-- 👻 **Invisible in screen shares and recordings** (macOS app) - you see it, your audience doesn't.
-- 🎨 **Any background color + transparency slider**, text auto-adjusts for readability.
-- 📚 **Script library** - save scripts as plain text files, reload them anytime.
-- 🔒 **Private** - everything runs locally; speech recognition is Apple's (macOS) or the browser's (web).
+- <img src="docs/icons/mic.svg" width="16" height="16" alt=""> **Voice tracking** - read your script and the highlight follows you, word by word. Pause, ad-lib, or skip a sentence and it catches up.
+- <img src="docs/icons/pin.svg" width="16" height="16" alt=""> **Always on top** - the note floats over Zoom, Meet, FaceTime, OBS, and full-screen apps. Park it right under your camera so your eyes stay near the lens.
+- <img src="docs/icons/ghost.svg" width="16" height="16" alt=""> **Invisible in screen shares and recordings** (macOS app) - you see it, your audience doesn't.
+- <img src="docs/icons/palette.svg" width="16" height="16" alt=""> **Any background color + transparency slider**, text auto-adjusts for readability.
+- <img src="docs/icons/library.svg" width="16" height="16" alt=""> **Script library** - save scripts as plain text files, reload them anytime.
+- <img src="docs/icons/lock.svg" width="16" height="16" alt=""> **Private** - everything runs locally; speech recognition is Apple's (macOS) or the browser's (web).
 
 ## Install (macOS)
 
