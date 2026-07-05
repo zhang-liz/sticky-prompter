@@ -64,6 +64,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var status = ""
     @Published var clickThrough = false
     @Published var captureHidden = true
+    @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
 
     var tokens: [Token] = []
     var rows: [Row] = []
@@ -100,6 +101,12 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         clickThrough = d.bool(forKey: "clickThrough")
         captureHidden = d.object(forKey: "captureHidden") as? Bool ?? true
+        if let path = d.string(forKey: "libraryDir") {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                libraryDir = URL(fileURLWithPath: path, isDirectory: true)
+            }   // folder gone → stay on the default library
+        }
         super.init()
         rebuild()
         refreshSavedNames()
@@ -131,35 +138,59 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(bgB, forKey: "bgB")
         d.set(clickThrough, forKey: "clickThrough")
         d.set(captureHidden, forKey: "captureHidden")
+        d.set(libraryDir.path, forKey: "libraryDir")
     }
 
     // MARK: script library (plain .txt files, user-accessible)
 
-    static let scriptsDir: URL = {
+    static let defaultScriptsDir: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Sticky Prompter/Scripts", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
 
+    var usingDefaultLibrary: Bool { libraryDir == Self.defaultScriptsDir }
+
     private func scriptURL(_ name: String) -> URL {
         let safe = name
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespaces)
-        return Self.scriptsDir.appendingPathComponent(safe + ".txt")
+        return libraryDir.appendingPathComponent(safe + ".txt")
     }
 
     func refreshSavedNames() {
         let urls = (try? FileManager.default.contentsOfDirectory(
-            at: Self.scriptsDir, includingPropertiesForKeys: nil)) ?? []
+            at: libraryDir, includingPropertiesForKeys: nil)) ?? []
         savedNames = urls
             .filter { $0.pathExtension == "txt" }
             .map { $0.deletingPathExtension().lastPathComponent }
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    func setLibraryDir(_ url: URL) {
+        libraryDir = url
+        persist()
+        refreshSavedNames()
+    }
+
+    func chooseLibraryFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = libraryDir
+        panel.prompt = "Use Folder"
+        panel.message = "Scripts are the .txt files in this folder; saves go here too."
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            setLibraryDir(url)
+        }
+    }
+
     func saveScript(_ name: String, text: String) {
+        try? FileManager.default.createDirectory(at: libraryDir, withIntermediateDirectories: true)
         try? text.write(to: scriptURL(name), atomically: true, encoding: .utf8)
         refreshSavedNames()
     }
@@ -591,8 +622,22 @@ struct EditorView: View {
     @ObservedObject var m: PrompterModel
     @State private var draft = ""
     @State private var name = ""
+    @State private var snapshot = ""   // editor contents at last load/save
 
     var nameOK: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// True when it's fine to replace the editor contents (nothing typed,
+    /// or the user confirms discarding what's there).
+    func confirmDiscard() -> Bool {
+        guard draft != snapshot,
+              !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        let a = NSAlert()
+        a.messageText = "Discard unsaved changes?"
+        a.informativeText = "The editor has changes that aren't saved to the library."
+        a.addButton(withTitle: "Discard")
+        a.addButton(withTitle: "Cancel")
+        return a.runModal() == .alertFirstButtonReturn
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -604,7 +649,7 @@ struct EditorView: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.secondary)
                     if m.savedNames.isEmpty {
-                        Text("Nothing saved yet.\nName your script and hit\n“Save to library”.")
+                        Text("No scripts here yet.\nName your script and hit\n“Save to library”.")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                     }
@@ -613,7 +658,8 @@ struct EditorView: View {
                             ForEach(m.savedNames, id: \.self) { n in
                                 HStack(spacing: 4) {
                                     Button {
-                                        if let t = m.loadScript(n) { draft = t; name = n }
+                                        guard confirmDiscard() else { return }
+                                        if let t = m.loadScript(n) { draft = t; name = n; snapshot = t }
                                     } label: {
                                         HStack(spacing: 5) {
                                             Image(systemName: "doc.text")
@@ -642,6 +688,24 @@ struct EditorView: View {
                         }
                     }
                     Spacer()
+                    Divider()
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder")
+                        Text(m.usingDefaultLibrary ? "Default library" : m.libraryDir.lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .help(m.libraryDir.path)
+                    HStack(spacing: 6) {
+                        Button("Choose folder…") { m.chooseLibraryFolder() }
+                        if !m.usingDefaultLibrary {
+                            Button("Default") { m.setLibraryDir(PrompterModel.defaultScriptsDir) }
+                                .help("Back to the built-in library folder")
+                        }
+                    }
+                    .controlSize(.small)
                 }
                 .frame(width: 175)
 
@@ -655,7 +719,11 @@ struct EditorView: View {
                         .font(.system(size: 14))
                         .frame(minWidth: 380, minHeight: 300)
                     HStack {
-                        Button("Save to library") { m.saveScript(name, text: draft) }
+                        Button("New") {
+                            if confirmDiscard() { draft = ""; name = ""; snapshot = "" }
+                        }
+                        .help("Start a blank script")
+                        Button("Save to library") { m.saveScript(name, text: draft); snapshot = draft }
                             .disabled(!nameOK)
                         Spacer()
                         Button("Cancel") { m.editing = false }
@@ -673,7 +741,7 @@ struct EditorView: View {
         }
         .padding(16)
         .frame(minWidth: 640, minHeight: 400)
-        .onAppear { draft = m.script; name = m.scriptName }
+        .onAppear { draft = m.script; name = m.scriptName; snapshot = m.script }
     }
 }
 
@@ -919,6 +987,18 @@ func runSelfTest() {
     expectBool("goLive sets live", m.live, true)
     m.enterEdit()
     expectBool("enterEdit clears live", m.live, false)
+    // library round-trip in a user-chosen folder (persistEnabled=false keeps
+    // the folder switch out of UserDefaults)
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sticky-prompter-selftest-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    m.setLibraryDir(tmp)
+    expectBool("custom folder starts empty", m.savedNames.isEmpty, true)
+    m.saveScript("Test Script", text: "hello world")
+    expectBool("save lists script", m.savedNames == ["Test Script"], true)
+    expectBool("load round-trips", m.loadScript("Test Script") == "hello world", true)
+    m.setLibraryDir(PrompterModel.defaultScriptsDir)
+    try? FileManager.default.removeItem(at: tmp)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
     exit(fails == 0 ? 0 : 1)
 }
