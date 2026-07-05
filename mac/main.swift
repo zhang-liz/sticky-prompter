@@ -63,6 +63,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var live = false
     @Published var status = ""
     @Published var clickThrough = false
+    @Published var captureHidden = true
 
     var tokens: [Token] = []
     var rows: [Row] = []
@@ -96,6 +97,8 @@ final class PrompterModel: NSObject, ObservableObject {
         } else {
             bgR = 0.07; bgG = 0.07; bgB = 0.10
         }
+        clickThrough = d.bool(forKey: "clickThrough")
+        captureHidden = d.object(forKey: "captureHidden") as? Bool ?? true
         super.init()
         rebuild()
         refreshSavedNames()
@@ -118,6 +121,8 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(bgR, forKey: "bgR")
         d.set(bgG, forKey: "bgG")
         d.set(bgB, forKey: "bgB")
+        d.set(clickThrough, forKey: "clickThrough")
+        d.set(captureHidden, forKey: "captureHidden")
     }
 
     // MARK: script library (plain .txt files, user-accessible)
@@ -637,7 +642,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
-        p.sharingType = .none   // invisible in screen recordings & screen shares
+        // invisible in screen recordings & screen shares (persisted preference)
+        p.sharingType = model.captureHidden ? .none : .readOnly
+        p.ignoresMouseEvents = model.clickThrough
         // no traffic lights — the top edge belongs to the script (quit via menu bar icon)
         p.standardWindowButton(.closeButton)?.isHidden = true
         p.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -667,10 +674,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let ct = NSMenuItem(title: "Click-through (ignore mouse)", action: #selector(toggleClickThrough), keyEquivalent: "t")
         ct.target = self
+        ct.tag = 1
+        ct.state = model.clickThrough ? .on : .off
         menu.addItem(ct)
         let hide = NSMenuItem(title: "Hide from screen sharing & recording", action: #selector(toggleCaptureHidden), keyEquivalent: "h")
         hide.target = self
-        hide.state = .on
+        hide.state = model.captureHidden ? .on : .off
         menu.addItem(hide)
         let show = NSMenuItem(title: "Show note", action: #selector(showNote), keyEquivalent: "s")
         show.target = self
@@ -685,12 +694,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.clickThrough.toggle()
         panel.ignoresMouseEvents = model.clickThrough
         sender.state = model.clickThrough ? .on : .off
+        model.persist()
     }
 
     @objc func toggleCaptureHidden(_ sender: NSMenuItem) {
-        let hidden = panel.sharingType == .none
-        panel.sharingType = hidden ? .readOnly : .none
-        sender.state = hidden ? .off : .on
+        model.captureHidden.toggle()
+        panel.sharingType = model.captureHidden ? .none : .readOnly
+        sender.state = model.captureHidden ? .on : .off
+        model.persist()
     }
 
     @objc func showNote() {
