@@ -35,9 +35,18 @@ swiftc -O -target x86_64-apple-macos13 -o .sp-x86_64 main.swift
 lipo -create .sp-arm64 .sp-x86_64 -output "$APP/Contents/MacOS/StickyPrompter"
 rm -f .sp-arm64 .sp-x86_64
 
-# ad-hoc sign so macOS associates mic/speech permissions with the bundle
-codesign --force --deep -s - "$APP"
-echo "✅ Built $APP"
+# sign with the stable local identity when present (see dev-signing.sh) so
+# mic/speech permissions survive rebuilds; ad-hoc otherwise
+DEV_KEYCHAIN="$HOME/Library/Keychains/sticky-prompter-dev.keychain-db"
+DEV_IDENTITY="Sticky Prompter Dev"
+if [ -f "$DEV_KEYCHAIN" ] && security find-identity -v -p codesigning "$DEV_KEYCHAIN" 2>/dev/null | grep -q "$DEV_IDENTITY"; then
+  security unlock-keychain -p "sticky-prompter-local" "$DEV_KEYCHAIN"
+  codesign --force --deep --keychain "$DEV_KEYCHAIN" -s "$DEV_IDENTITY" "$APP"
+  echo "✅ Built $APP (signed: $DEV_IDENTITY)"
+else
+  codesign --force --deep -s - "$APP"
+  echo "✅ Built $APP (ad-hoc signed — run ./dev-signing.sh once to stop permission re-prompts)"
+fi
 
 if [ "${1:-}" = "install" ]; then
   pkill -f "StickyPrompter.app/Contents/MacOS/StickyPrompter" 2>/dev/null || true
