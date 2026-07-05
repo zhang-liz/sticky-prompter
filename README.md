@@ -5,26 +5,26 @@
 <h1 align="center">Sticky Prompter</h1>
 
 <p align="center">
-A voice-controlled sticky-note teleprompter that floats on top of your video calls.<br>
-It listens as you speak and follows along with your script — no scrolling, no clicking.
+A voice-controlled sticky-note teleprompter that floats on top of any active window.<br>
+It listens as you speak and follows along with your script - no scrolling, no clicking.
 </p>
 
 ---
 
 ## What it does
 
-- 🎤 **Voice tracking** — read your script and the highlight follows you, word by word. Pause, ad-lib, or skip a sentence and it catches up.
-- 📌 **Always on top** — the note floats over Zoom, Meet, FaceTime, OBS, and full-screen apps. Park it right under your camera so your eyes stay near the lens.
-- 👻 **Invisible in screen shares and recordings** (macOS app) — you see it, your audience doesn't.
+- 🎤 **Voice tracking** - read your script and the highlight follows you, word by word. Pause, ad-lib, or skip a sentence and it catches up.
+- 📌 **Always on top** - the note floats over Zoom, Meet, FaceTime, OBS, and full-screen apps. Park it right under your camera so your eyes stay near the lens.
+- 👻 **Invisible in screen shares and recordings** (macOS app) - you see it, your audience doesn't.
 - 🎨 **Any background color + transparency slider**, text auto-adjusts for readability.
-- 📚 **Script library** — save scripts as plain text files, reload them anytime.
-- 🔒 **Private** — everything runs locally; speech recognition is Apple's (macOS) or the browser's (web).
+- 📚 **Script library** - save scripts as plain text files, reload them anytime.
+- 🔒 **Private** - everything runs locally; speech recognition is Apple's (macOS) or the browser's (web).
 
 ## Install (macOS)
 
-**Option 1 — download:** grab `StickyPrompter.zip` from the [latest release](../../releases/latest), unzip, drag the app to Applications. On first open, macOS will warn about an unverified developer — go to **System Settings → Privacy & Security → "Open Anyway"** (one time only). This app is shared without Apple's $99/year notarization, hence the warning.
+**Option 1 - download:** grab `StickyPrompter.zip` from the [latest release](../../releases/latest), unzip, drag the app to Applications. On first open, macOS will warn about an unverified developer - go to **System Settings → Privacy & Security → "Open Anyway"** (one time only). This app is shared without Apple's $99/year notarization, hence the warning.
 
-**Option 2 — build from source** (needs Xcode Command Line Tools):
+**Option 2 - build from source** (needs Xcode Command Line Tools):
 
 ```bash
 git clone https://github.com/zhang-liz/sticky-prompter.git
@@ -36,7 +36,7 @@ Then launch **Sticky Prompter** from Spotlight. Allow Microphone and Speech Reco
 
 ## Web version
 
-There's also a browser version in [`web/`](web/) that runs in Chrome using the Web Speech API and Document Picture-in-Picture — always-on-top, but without transparency or capture-hiding. See its [readme](web/README.md).
+There's also a browser version in [`web/`](web/) that runs in Chrome using the Web Speech API and Document Picture-in-Picture - always-on-top, but without transparency or capture-hiding. See its [readme](web/README.md).
 
 ## How the voice tracking works
 
