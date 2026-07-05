@@ -22,7 +22,7 @@ It listens as you speak and follows along with your script - no scrolling, no cl
 
 ## Install (macOS)
 
-**Option 1 - download:** grab `StickyPrompter.zip` from the [latest release](../../releases/latest), unzip, drag the app to Applications. On first open, macOS will warn about an unverified developer - go to **System Settings → Privacy & Security → "Open Anyway"** (one time only). This app is shared without Apple's $99/year notarization, hence the warning.
+**Option 1 - download:** grab `StickyPrompter.dmg` from the [latest release](../../releases/latest), open it, drag the app to Applications. On first open, macOS will warn about an unverified developer - go to **System Settings → Privacy & Security → "Open Anyway"** (one time only). This app is shared without Apple's $99/year notarization, hence the warning.
 
 **Option 2 - build from source** (needs Xcode Command Line Tools):
 
