@@ -410,36 +410,56 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // script first: the sentence being read sits at the very top,
-            // as close to the camera as possible
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
-                        ForEach(m.rows) { r in
-                            Text(attributed(r))
-                                .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
-                                .lineSpacing(m.fontSize * 0.35)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
-                                .id(r.id)
-                        }
-                        Color.clear.frame(height: 340)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .onChange(of: m.pos) { _ in
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(m.currentRowID, anchor: UnitPoint(x: 0, y: 0.02))
-                    }
-                }
+            if m.live {
+                scriptView
+                footer
+            } else {
+                editBar
+                editor
             }
-            footer
-            header
         }
         .background(bgColor)
         .sheet(isPresented: $m.editing) { EditorView(m: m) }
+    }
+
+    // live mode: the sentence being read sits at the very top,
+    // as close to the camera as possible
+    var scriptView: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
+                    ForEach(m.rows) { r in
+                        Text(attributed(r))
+                            .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
+                            .lineSpacing(m.fontSize * 0.35)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
+                            .id(r.id)
+                    }
+                    Color.clear.frame(height: 340)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { m.enterEdit() }
+            .onChange(of: m.pos) { _ in
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo(m.currentRowID, anchor: UnitPoint(x: 0, y: 0.02))
+                }
+            }
+        }
+    }
+
+    // edit mode: type straight into the note
+    var editor: some View {
+        TextEditor(text: $m.script)
+            .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
+            .foregroundColor(mainColor)
+            .modifier(ClearTextEditor())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
     }
 
     func attributed(_ r: Row) -> AttributedString {
@@ -459,38 +479,47 @@ struct ContentView: View {
         return out
     }
 
-    var header: some View {
+    var bgBinding: Binding<Color> {
+        Binding(
+            get: { Color(red: m.bgR, green: m.bgG, blue: m.bgB) },
+            set: { c in
+                let ns = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(srgbRed: 0.07, green: 0.07, blue: 0.10, alpha: 1)
+                m.bgR = Double(ns.redComponent)
+                m.bgG = Double(ns.greenComponent)
+                m.bgB = Double(ns.blueComponent)
+                m.persist()
+            })
+    }
+
+    var editBar: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(m.listening ? Color.red : mainColor.opacity(0.25))
-                .frame(width: 8, height: 8)
             Text(m.scriptName.isEmpty ? "STICKY PROMPTER" : m.scriptName.uppercased())
                 .font(.system(size: 10, weight: .bold))
                 .kerning(1)
                 .lineLimit(1)
                 .foregroundColor(mainColor.opacity(0.5))
             Spacer()
-            ctl(m.listening ? "mic.fill" : "mic", help: "Voice tracking on/off (space)") { m.toggleMic() }
-                .foregroundColor(m.listening ? .red : mainColor.opacity(0.75))
-            ctl("arrow.counterclockwise", help: "Restart from top (R)") { m.restartFromTop() }
             ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
             ctl("textformat.size.larger", help: "Bigger text") { m.fontSize = min(48, m.fontSize + 2); m.persist() }
-            ColorPicker("", selection: Binding(
-                get: { Color(red: m.bgR, green: m.bgG, blue: m.bgB) },
-                set: { c in
-                    let ns = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(srgbRed: 0.07, green: 0.07, blue: 0.10, alpha: 1)
-                    m.bgR = Double(ns.redComponent)
-                    m.bgG = Double(ns.greenComponent)
-                    m.bgB = Double(ns.blueComponent)
-                    m.persist()
-                }))
+            ColorPicker("", selection: bgBinding)
                 .labelsHidden()
                 .frame(width: 26)
                 .help("Background color")
-            ctl("pencil", help: "Scripts — edit, save, load (E)") { m.editing = true }
             Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
                 .frame(width: 64)
                 .help("Background transparency")
+            ctl("books.vertical", help: "Script library — save, load, delete") { m.editing = true }
+            Button { m.goLive() } label: {
+                Label("Go Live", systemImage: "play.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(hiBG)
+                    .foregroundColor(hiFG)
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .help("Start prompting (Esc)")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -510,6 +539,15 @@ struct ContentView: View {
 
     var footer: some View {
         VStack(spacing: 0) {
+            if m.status.isEmpty && !m.listening {
+                Text("space = mic · double-click = edit")
+                    .font(.system(size: 10))
+                    .foregroundColor(mainColor.opacity(0.4))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
+            }
             if !m.status.isEmpty {
                 Text(m.status)
                     .font(.system(size: 10))
@@ -525,6 +563,16 @@ struct ContentView: View {
             }
             .frame(height: 3)
             .background(mainColor.opacity(0.12))
+        }
+    }
+}
+
+struct ClearTextEditor: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 13.0, *) {
+            content.scrollContentBackground(.hidden)
+        } else {
+            content
         }
     }
 }
