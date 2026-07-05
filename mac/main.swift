@@ -81,6 +81,7 @@ final class PrompterModel: NSObject, ObservableObject {
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Timer?
     private var taskGen = 0   // stale-task guard: cancelled tasks still fire callbacks
+    private var persistSub: AnyCancellable?
 
     override init() {
         let d = UserDefaults.standard
@@ -102,6 +103,10 @@ final class PrompterModel: NSObject, ObservableObject {
         super.init()
         rebuild()
         refreshSavedNames()
+        // don't lose direct edits on quit — persist shortly after typing stops
+        persistSub = $script
+            .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.persist() }
     }
 
     static let sample = """
@@ -112,7 +117,10 @@ final class PrompterModel: NSObject, ObservableObject {
     Before we dive in, a quick note. Everything I show today is free and open source, and the link to the full code is in the description below.
     """
 
+    var persistEnabled = true   // selftest must not clobber real settings
+
     func persist() {
+        guard persistEnabled else { return }
         let d = UserDefaults.standard
         d.set(script, forKey: "script")
         d.set(scriptName, forKey: "scriptName")
@@ -460,7 +468,7 @@ struct ContentView: View {
             .modifier(ClearTextEditor())
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .onChange(of: m.script) { _ in m.persist() }   // don't lose edits on quit
+            .onExitCommand { m.goLive() }   // Esc commits and goes live
     }
 
     func attributed(_ r: Row) -> AttributedString {
@@ -513,6 +521,7 @@ struct ContentView: View {
             Button { m.goLive() } label: {
                 Label("Go Live", systemImage: "play.fill")
                     .font(.system(size: 11, weight: .bold))
+                    .fixedSize()
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(hiBG)
@@ -522,7 +531,6 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("Start prompting (Esc)")
         }
-        .padding(.leading, 70)   // clear the traffic lights (fullSizeContentView)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(mainColor.opacity(0.06))
@@ -680,7 +688,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 460),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered, defer: false)
         p.titleVisibility = .hidden
         p.titlebarAppearsTransparent = true
@@ -717,7 +725,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // NEVER true: AppKit's last-window check ignores NSPanels, so it would
+    // terminate the app mid-use whenever a helper window (sheet, IME palette)
+    // closes. Closing the note hides it; quit lives in the menu-bar icon.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        model.persist()
+    }
 
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -727,6 +742,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mode.target = self
         mode.tag = 2
         menu.addItem(mode)
+        let mic = NSMenuItem(title: "Voice tracking on/off", action: #selector(toggleMicFromMenu), keyEquivalent: " ")
+        mic.target = self
+        menu.addItem(mic)
+        let restart = NSMenuItem(title: "Restart from top", action: #selector(restartFromMenu), keyEquivalent: "r")
+        restart.target = self
+        menu.addItem(restart)
         menu.addItem(.separator())
         let ct = NSMenuItem(title: "Click-through (ignore mouse)", action: #selector(toggleClickThrough), keyEquivalent: "t")
         ct.target = self
@@ -761,7 +782,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showNote() {
+        if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showNote() }
+        return false
     }
 
     @objc func toggleMode() {
@@ -769,14 +796,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    @objc func toggleMicFromMenu() {
+        if !model.live { model.goLive() }   // tracking needs committed tokens
+        model.toggleMic()
+    }
+
+    @objc func restartFromMenu() {
+        model.restartFromTop()
+    }
+
     /// Edit mode = normal window (traffic lights, minimizable, takes keyboard).
     /// Live mode = bare floating note.
     func applyMode(live: Bool) {
         guard let p = panel else { return }
-        if live {
-            p.styleMask.remove(.miniaturizable)
-        } else {
-            p.styleMask.insert(.miniaturizable)
+        // NOTE: styleMask must never be mutated after init — runtime changes
+        // destabilize the panel (sheet presentation then closes it and the
+        // app quits via "last window closed"). Buttons are hidden/shown instead.
+        if !live {
+            NSApp.activate(ignoringOtherApps: true)
             // click-through would make editing impossible
             if model.clickThrough {
                 model.clickThrough = false
@@ -826,6 +863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 func runSelfTest() {
     let m = PrompterModel()
+    m.persistEnabled = false   // never touch the user's saved script/settings
     m.script = PrompterModel.sample
     m.rebuild()
     var fails = 0
