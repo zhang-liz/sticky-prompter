@@ -460,6 +460,7 @@ struct ContentView: View {
             .modifier(ClearTextEditor())
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .onChange(of: m.script) { _ in m.persist() }   // don't lose edits on quit
     }
 
     func attributed(_ r: Row) -> AttributedString {
@@ -795,6 +796,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func setupKeys() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             guard let self = self, !self.model.editing else { return ev }
+            // only shortcuts aimed at the note itself (not the color panel etc.)
+            guard ev.window === self.panel else { return ev }
             // Esc in edit mode commits and goes live, even while typing
             if ev.keyCode == 53, !self.model.live {
                 self.model.goLive()
@@ -866,6 +869,7 @@ func runSelfTest() {
     m.rebuild()
     expect("plain rebuild resets", m.pos, 0)
     // goLive commits + keeps clamped position; enterEdit stops listening
+    m.scriptName = ""   // avoid writing a library file from the selftest
     m.jump(to: 5)
     m.goLive()
     expect("goLive keeps pos", m.pos, 5)
