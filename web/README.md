@@ -4,7 +4,11 @@ The browser version of Sticky Prompter. It runs in Chrome and uses the Web Speec
 
 No build step, no dependencies, and no data leaves your machine beyond the browser's own speech recognition.
 
-## Run it
+## Try it now
+
+**https://zhang-liz.github.io/sticky-prompter/** — deployed from this folder by GitHub Actions on every push to `main`.
+
+## Or run it locally
 
 ```bash
 cd web

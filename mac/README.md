@@ -10,7 +10,11 @@ Advantages over the web version:
 - **On-device / Apple speech recognition** — nothing leaves your Mac beyond Apple's recognizer
 - **Click-through mode** — the note ignores your mouse entirely (toggle from the 📝 menu bar icon)
 
-## Build & run
+## Install
+
+**Easiest:** [download StickyPrompter.dmg](https://github.com/zhang-liz/sticky-prompter/releases/latest/download/StickyPrompter.dmg) from the latest release, open it, and drag the app to **Applications**. On first launch, approve it under **System Settings → Privacy & Security → Open Anyway** (the app isn't notarized).
+
+**Or build from source:**
 
 ```bash
 cd mac
