@@ -17,6 +17,7 @@ It listens as you speak and follows along with your script - no scrolling, no cl
 - <img src="docs/icons/pin.svg" width="16" height="16" alt=""> **Always on top** - the note floats over Zoom, Meet, FaceTime, OBS, and full-screen apps. Park it right under your camera so your eyes stay near the lens.
 - <img src="docs/icons/ghost.svg" width="16" height="16" alt=""> **Invisible in screen shares and recordings** (macOS app) - you see it, your audience doesn't.
 - <img src="docs/icons/palette.svg" width="16" height="16" alt=""> **Any background color + transparency slider**, text auto-adjusts for readability.
+- <img src="docs/icons/library.svg" width="16" height="16" alt=""> **Edit and live modes** - type your script directly on the note in a normal window, then go live: every button disappears and only your words remain. Double-click to edit again.
 - <img src="docs/icons/library.svg" width="16" height="16" alt=""> **Script library** - save scripts as plain text files, reload them anytime.
 - <img src="docs/icons/lock.svg" width="16" height="16" alt=""> **Private** - everything runs locally; speech recognition is Apple's (macOS) or the browser's (web).
 

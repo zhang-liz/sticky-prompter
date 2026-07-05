@@ -20,28 +20,30 @@ cd mac
 
 Requires Xcode Command Line Tools (`xcode-select --install` if missing). The build produces a universal binary (Apple Silicon + Intel). The first time you hit the mic button, macOS will ask for **Microphone** and **Speech Recognition** permissions — allow both.
 
-## Controls
+## Two modes
 
-The script starts at the very top of the window — park the note right under your camera. All controls live in the bar at the bottom:
+**Edit mode** (how the app opens): a normal window with close/minimize/zoom buttons. Type your script straight into the note. The top bar has:
 
 | Control | Action |
 |---|---|
-| 🎤 | voice tracking on/off |
-| ↺ | restart from top |
 | A- / A+ | text size |
 | color swatch | background color (text auto-adjusts light/dark for readability) |
-| ✏️ | scripts — edit, save to library, load, delete |
 | slider | background transparency |
+| 📚 | script library — save, load, delete named scripts |
+| ▶ Go Live | switch to live mode (or press `Esc`) |
 
-Keyboard (when the note is focused): `space` mic, `←`/`→` nudge a word, `↑`/`↓` jump ~a line, `R` restart, `E` edit.
+**Live mode**: all buttons disappear — just your script and a thin progress bar. The current sentence pins to the top edge, right under your camera. Controls are the keyboard and the menu-bar icon:
 
-Drag the note anywhere by its background. Resize from any edge. Position, script, and settings persist across launches.
+- `space` mic on/off · `←`/`→` nudge a word · `↑`/`↓` jump ~a line · `R` restart
+- **double-click the text** (or press `E`) to go back to edit mode
 
-**Menu bar icon (📝):** click-through mode, hide/show from screen recordings, re-show the note, quit.
+Drag the note anywhere by its background. Resize from any edge. Position, script, colors, and all toggles persist across launches. Closing the note hides it — bring it back from the menu-bar icon or by reopening the app; quit from the menu-bar icon.
+
+**Menu bar icon (📝):** edit/live toggle, voice tracking, restart, click-through mode, hide/show from screen recordings, re-show the note, quit.
 
 ## Script library
 
-The ✏️ editor has a saved-scripts sidebar. Give a script a name and hit **Save to library**; click any saved name to load it; the trash icon moves it to the Trash. Scripts are plain `.txt` files in `~/Library/Application Support/Sticky Prompter/Scripts/`, so you can also drop files there yourself or edit them in any text editor. The note's footer shows the name of the loaded script.
+The 📚 library has a saved-scripts sidebar. Give a script a name and hit **Save to library**; click any saved name to load it; the trash icon moves it to the Trash. Scripts are plain `.txt` files in `~/Library/Application Support/Sticky Prompter/Scripts/`, so you can also drop files there yourself or edit them in any text editor. The note's footer shows the name of the loaded script.
 
 ## How the tracking works
 
