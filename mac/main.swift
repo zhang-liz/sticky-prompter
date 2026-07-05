@@ -10,7 +10,8 @@ import UniformTypeIdentifiers
 func normWord(_ s: String) -> String {
     var out = ""
     for sc in s.lowercased().unicodeScalars {
-        if CharacterSet.alphanumerics.contains(sc) || sc == "'" { out.unicodeScalars.append(sc) }
+        if sc == "\u{2019}" { out.unicodeScalars.append("'") }   // curly → straight apostrophe
+        else if CharacterSet.alphanumerics.contains(sc) || sc == "'" { out.unicodeScalars.append(sc) }
     }
     return out
 }
@@ -240,22 +241,23 @@ final class PrompterModel: NSObject, ObservableObject {
         panel.message = "Choose a text or Word file to use as your script."
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let isWord = Self.isWordFile(url)
         guard let text = Self.readScriptFile(url) else {
             flash("⚠️ Couldn't read “\(url.lastPathComponent)”")
             return
         }
         script = text
         scriptName = url.deletingPathExtension().lastPathComponent
-        // Word files are import-only: writing back would wipe their styling
-        sourceURL = isWord ? nil : url
+        sourceURL = url
+        wordSaveApproved = false   // re-ask before overwriting a Word file
         rebuild()
         persist()
         editing = false
         live = false   // land in the edit interface with the file loaded
-        flash(isWord ? "Opened “\(url.lastPathComponent)” — saves go to the library"
-                     : "Opened “\(url.lastPathComponent)”")
+        flash("Opened “\(url.lastPathComponent)”")
     }
+
+    /// Overwriting a Word file flattens its styling — ask once per opened doc.
+    var wordSaveApproved = false
 
     static let wordTypes: [UTType] = [
         UTType("org.openxmlformats.wordprocessingml.document"),   // .docx
@@ -271,8 +273,9 @@ final class PrompterModel: NSObject, ObservableObject {
     static func readScriptFile(_ url: URL) -> String? {
         var text: String?
         if isWordFile(url) {
-            text = (try? NSAttributedString(
-                url: url, options: [:], documentAttributes: nil))?.string
+            text = ((try? NSAttributedString(
+                url: url, options: [:], documentAttributes: nil))?.string)
+                .map(sanitizeWordImport)
         } else {
             var enc = String.Encoding.utf8
             text = (try? String(contentsOf: url, usedEncoding: &enc))
@@ -284,8 +287,49 @@ final class PrompterModel: NSObject, ObservableObject {
             .replacingOccurrences(of: "\r", with: "\n")
     }
 
+    /// Word text arrives with artifacts that read as garbage on the note:
+    /// list bullets as middle dots or symbol-font private-use glyphs,
+    /// image placeholders, non-breaking spaces, vertical-tab line breaks.
+    static func sanitizeWordImport(_ s: String) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        for sc in s.unicodeScalars {
+            switch sc.value {
+            case 0xFFFC: continue                      // image/object placeholder
+            case 0xE000...0xF8FF: out += "•"           // symbol-font bullets
+            case 0x00A0: out += " "                    // non-breaking space
+            case 0x000B, 0x2028, 0x2029: out += "\n"   // soft/para breaks
+            case 0x0009: out += " "                    // list-indent tabs
+            default: out.unicodeScalars.append(sc)
+            }
+        }
+        // Word's plain middle-dot bullets → real bullets
+        return out
+            .components(separatedBy: "\n")
+            .map { line -> String in
+                let t = line.drop(while: { $0 == " " })
+                return t.hasPrefix("· ") ? "• " + t.dropFirst(2)
+                     : t == "·" ? "•" : line
+            }
+            .joined(separator: "\n")
+    }
+
     /// Write the script back to the file it was opened from.
     private func saveToSource(_ url: URL) {
+        if Self.isWordFile(url) {
+            if !wordSaveApproved {
+                let a = NSAlert()
+                a.messageText = "Save over the Word document?"
+                a.informativeText = "Sticky Prompter writes plain text — the document's original fonts, images and layout won't be kept."
+                a.addButton(withTitle: "Save")
+                a.addButton(withTitle: "Cancel")
+                guard a.runModal() == .alertFirstButtonReturn else { return }
+                wordSaveApproved = true
+            }
+            flash(writeWordFile(url) ? "Saved “\(url.lastPathComponent)”"
+                                     : "⚠️ Couldn't save “\(url.lastPathComponent)”")
+            return
+        }
         do {
             try script.write(to: url, atomically: true, encoding: .utf8)
             flash("Saved “\(url.lastPathComponent)”")
@@ -389,12 +433,27 @@ final class PrompterModel: NSObject, ObservableObject {
 
     func goLive() {
         if let u = sourceURL {
-            try? script.write(to: u, atomically: true, encoding: .utf8)   // keep source file in sync
+            if Self.isWordFile(u) {
+                if wordSaveApproved { writeWordFile(u) }   // never silently flatten a Word doc
+            } else {
+                try? script.write(to: u, atomically: true, encoding: .utf8)   // keep source file in sync
+            }
         } else if !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
             saveScript(scriptName, text: script)   // keep library file in sync
         }
         rebuild(resetPos: false)
         live = true
+    }
+
+    @discardableResult
+    func writeWordFile(_ url: URL) -> Bool {
+        let attr = NSAttributedString(string: script,
+                                      attributes: [.font: NSFont.systemFont(ofSize: 12)])
+        guard let data = try? attr.data(
+                from: NSRange(location: 0, length: attr.length),
+                documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML]),
+              (try? data.write(to: url)) != nil else { return false }
+        return true
     }
 
     func enterEdit() {
@@ -1203,6 +1262,17 @@ func runSelfTest() {
     conv.arguments = ["-convert", "docx", txtSrc.path, "-output", docx.path]
     try? conv.run(); conv.waitUntilExit()
     expectBool("docx import", PrompterModel.readScriptFile(docx)?.contains("word doc body") == true, true)
+    // Word artifacts cleaned up on import
+    expectBool("word import sanitized",
+               PrompterModel.sanitizeWordImport("·\tItem\u{00A0}one\u{000B}\u{E000} two\u{FFFC}") == "• Item one\n• two", true)
+    expectBool("curly apostrophe normalized", normWord("don’t") == "don't", true)
+    // Word write-back round-trips through the docx exporter
+    m.sourceURL = docx
+    m.wordSaveApproved = true
+    m.script = "rewritten body"
+    m.saveCurrentScript()
+    expectBool("docx write-back", PrompterModel.readScriptFile(docx)?.contains("rewritten body") == true, true)
+    m.sourceURL = nil
     // markdown: headings styled, syntax stripped, speech still matches
     let mdFile = tmp.appendingPathComponent("t.md")
     try? "x".write(to: mdFile, atomically: true, encoding: .utf8)
