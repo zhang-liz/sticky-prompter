@@ -84,6 +84,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var autoScroll = false      // steady pace instead of voice tracking
     @Published var autoPaused = false
     @Published var wpm: Double = 140       // auto-scroll speed, words per minute
+    @Published var recentFiles: [URL] = []
     @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
     @Published var sourceURL: URL?   // external file the script came from; saves write back to it
     @Published var panelIsKey = true // live-mode shortcuts only work while the note is key
@@ -129,6 +130,8 @@ final class PrompterModel: NSObject, ObservableObject {
         captureHidden = d.object(forKey: "captureHidden") as? Bool ?? true
         autoScroll = d.bool(forKey: "autoScroll")
         wpm = d.object(forKey: "wpm") as? Double ?? 140
+        recentFiles = (d.array(forKey: "recentFiles") as? [String] ?? [])
+            .map { URL(fileURLWithPath: $0) }
         if let path = d.string(forKey: "libraryDir") {
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
@@ -238,6 +241,7 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(captureHidden, forKey: "captureHidden")
         d.set(autoScroll, forKey: "autoScroll")
         d.set(wpm, forKey: "wpm")
+        d.set(recentFiles.map { $0.path }, forKey: "recentFiles")
         d.set(libraryDir.path, forKey: "libraryDir")
         if let u = sourceURL { d.set(u.path, forKey: "sourceURL") }
         else { d.removeObject(forKey: "sourceURL") }
@@ -337,16 +341,19 @@ final class PrompterModel: NSObject, ObservableObject {
         return loadScript(n) != script
     }
 
+    /// The current script would have no way back once replaced — ask.
+    private func confirmReplaceNote() -> Bool {
+        guard noteHasUnsavedChanges else { return true }
+        let a = NSAlert()
+        a.messageText = "Replace the current script?"
+        a.informativeText = "The note has changes that aren't saved anywhere yet."
+        a.addButton(withTitle: "Replace")
+        a.addButton(withTitle: "Cancel")
+        return alertsEnabled && a.runModal() == .alertFirstButtonReturn
+    }
+
     func openScriptFile() {
-        // the current script would have no way back once replaced — ask
-        if noteHasUnsavedChanges {
-            let a = NSAlert()
-            a.messageText = "Replace the current script?"
-            a.informativeText = "The note has changes that aren't saved anywhere yet."
-            a.addButton(withTitle: "Replace")
-            a.addButton(withTitle: "Cancel")
-            guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else { return }
-        }
+        guard confirmReplaceNote() else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -355,6 +362,22 @@ final class PrompterModel: NSObject, ObservableObject {
         panel.message = "Choose a text, Markdown, RTF or Word file to use as your script."
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        adoptScriptFile(url)
+    }
+
+    func openRecentFile(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            flash("⚠️ “\(url.lastPathComponent)” has moved or been deleted")
+            recentFiles.removeAll { $0.path == url.path }
+            persist()
+            return
+        }
+        guard confirmReplaceNote() else { return }
+        adoptScriptFile(url)
+    }
+
+    /// Make the file's content the script on the note.
+    func adoptScriptFile(_ url: URL) {
         guard let text = Self.readScriptFile(url) else {
             flash("⚠️ Couldn't read “\(url.lastPathComponent)”")
             return
@@ -367,12 +390,26 @@ final class PrompterModel: NSObject, ObservableObject {
         sourceBaseline = importOnly ? nil : text
         libraryBaseline = nil      // an existing library script of this name is not ours yet
         wordSaveApproved = false   // re-ask before overwriting a Word file
+        noteRecent(url)
         rebuild()
         persist()
         editing = false
         enterEdit()    // land in the edit interface — stops the mic if we were live
         flash(importOnly ? "Opened “\(url.lastPathComponent)” — saves go to the library"
                          : "Opened “\(url.lastPathComponent)”")
+    }
+
+    // MARK: recent files
+
+    private func noteRecent(_ url: URL) {
+        recentFiles.removeAll { $0.path == url.path }
+        recentFiles.insert(url, at: 0)
+        if recentFiles.count > 10 { recentFiles.removeLast(recentFiles.count - 10) }
+    }
+
+    func clearRecentFiles() {
+        recentFiles = []
+        persist()
     }
 
     /// Overwriting a Word file flattens its styling — ask once per opened doc.
@@ -1134,6 +1171,27 @@ struct ContentView: View {
             HStack(spacing: 1) {
                 ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
                 ctl("folder", help: "Open a file as the script (⌘O) — library lives in File ▸ Scripts (⌘L)") { m.openScriptFile() }
+                Menu {
+                    if m.recentFiles.isEmpty {
+                        Text("No recent files")
+                    } else {
+                        ForEach(m.recentFiles, id: \.path) { u in
+                            Button(u.lastPathComponent) { m.openRecentFile(u) }
+                                .help(u.path)
+                        }
+                        Divider()
+                        Button("Clear Recent") { m.clearRecentFiles() }
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundColor(mainColor.opacity(0.7))
+                .help("Recent files")
             }
             Button { m.goLive() } label: {
                 Label("Go Live", systemImage: "play.fill")
@@ -1592,7 +1650,8 @@ final class PrompterPanel: NSPanel {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
+    let recentMenu = NSMenu(title: "Open Recent")
     let model = PrompterModel()
     var panel: NSPanel!
     var statusItem: NSStatusItem!
@@ -1680,6 +1739,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let openItem = NSMenuItem(title: "Open Script File…", action: #selector(openFromMenu), keyEquivalent: "o")
         openItem.target = self
         file.addItem(openItem)
+        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        recentMenu.delegate = self
+        recentItem.submenu = recentMenu
+        file.addItem(recentItem)
         let saveItem = NSMenuItem(title: "Save Script", action: #selector(saveFromMenu), keyEquivalent: "s")
         saveItem.target = self
         file.addItem(saveItem)
@@ -1718,10 +1781,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.editing = true
     }
 
+    // File ▸ Open Recent is rebuilt from the model every time it opens
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === recentMenu else { return }
+        menu.removeAllItems()
+        guard !model.recentFiles.isEmpty else {
+            let none = NSMenuItem(title: "No Recent Files", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+            return
+        }
+        for u in model.recentFiles {
+            let item = NSMenuItem(title: u.lastPathComponent, action: #selector(openRecentFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = u
+            item.toolTip = u.path
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let clear = NSMenuItem(title: "Clear Menu", action: #selector(clearRecentFromMenu), keyEquivalent: "")
+        clear.target = self
+        menu.addItem(clear)
+    }
+
+    @objc func openRecentFromMenu(_ sender: NSMenuItem) {
+        guard !model.editing, let u = sender.representedObject as? URL else { return }
+        model.openRecentFile(u)
+    }
+
+    @objc func clearRecentFromMenu() { model.clearRecentFiles() }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(openFromMenu) || menuItem.action == #selector(saveFromMenu)
             || menuItem.action == #selector(toggleMode) || menuItem.action == #selector(toggleMicFromMenu)
-            || menuItem.action == #selector(restartFromMenu) || menuItem.action == #selector(libraryFromMenu) {
+            || menuItem.action == #selector(restartFromMenu) || menuItem.action == #selector(libraryFromMenu)
+            || menuItem.action == #selector(openRecentFromMenu(_:)) {
             return !model.editing
         }
         return true
@@ -2233,6 +2327,21 @@ func runSelfTest() {
     m.setLibraryDir(lockedDir)
     expectBool("failed save returns false", m.saveScript("x", text: "y"), false)
     try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedDir.path)
+    // recent files: opening tracks them, missing entries self-prune
+    let rec = tmp.appendingPathComponent("recent.txt")
+    try? "recent body".write(to: rec, atomically: true, encoding: .utf8)
+    m.script = ""   // clean note → no replace prompt to suppress
+    m.scriptName = ""
+    m.openRecentFile(rec)
+    expectBool("recent open adopts file", m.script == "recent body" && m.recentFiles.first?.path == rec.path, true)
+    let gone = tmp.appendingPathComponent("gone.txt")
+    m.recentFiles.insert(gone, at: 0)
+    m.openRecentFile(gone)
+    expectBool("missing recent self-prunes",
+               !m.recentFiles.contains { $0.path == gone.path } && m.script == "recent body", true)
+    m.recentFiles = []
+    m.sourceURL = nil
+    m.sourceBaseline = nil
     m.setLibraryDir(PrompterModel.defaultScriptsDir)
     try? FileManager.default.removeItem(at: tmp)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
