@@ -13,9 +13,11 @@ permissions:
   pages: write
   id-token: write
 
+# don't cancel an in-flight deployment — the deploy-pages API reports a
+# cancelled deployment as a hard failure. Let running deploys finish.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
