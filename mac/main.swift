@@ -680,7 +680,11 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         rebuild(resetPos: false)
         live = true
+        // going live means "I'm about to read" — start listening right away
+        if autoListen && !listening { startListening() }
     }
+
+    var autoListen = true   // selftest runs headless: no real mic there
 
     @discardableResult
     func writeWordFile(_ url: URL) -> Bool {
@@ -1025,7 +1029,7 @@ struct ContentView: View {
             Divider().frame(height: 14).opacity(0.4)
             HStack(spacing: 1) {
                 ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
-                ctl("books.vertical", help: "Scripts — library and files (⌘O opens a file directly)") { m.editing = true }
+                ctl("folder", help: "Open a file as the script (⌘O) — library lives in File ▸ Scripts (⌘L)") { m.openScriptFile() }
             }
             Button { m.goLive() } label: {
                 Label("Go Live", systemImage: "play.fill")
@@ -1061,9 +1065,9 @@ struct ContentView: View {
     var footer: some View {
         VStack(alignment: .leading, spacing: 5) {
             let hint = !m.status.isEmpty ? m.status
-                     : !m.listening ? (m.panelIsKey ? "space = mic · esc = edit"
-                                     : m.clickThrough ? "click-through on — mic via the menu bar note icon"
-                                                      : "click the note first, then space = mic")
+                     : !m.listening ? (m.panelIsKey ? "esc = edit"
+                                     : m.clickThrough ? "click-through on — control via the menu bar note icon"
+                                                      : "click the note, then esc = edit")
                      : ""
             if !hint.isEmpty {
                 Text(hint)
@@ -1225,24 +1229,25 @@ struct EditorView: View {
                     }
                     Spacer()
                     Divider()
-                    HStack(spacing: 5) {
-                        Image(systemName: "folder")
-                        Text(m.usingDefaultLibrary ? "Default library" : m.libraryDir.lastPathComponent)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .font(.system(size: 10.5))
-                    .foregroundColor(.secondary)
-                    .help(m.libraryDir.path)
-                    HStack(spacing: 6) {
-                        Button("Choose Folder…") { m.chooseLibraryFolder() }
-                            .help("Switch the library to another folder")
+                    // one folder control: the label is the menu
+                    Menu {
+                        Button("Change Library Folder…") { m.chooseLibraryFolder() }
                         if !m.usingDefaultLibrary {
-                            Button("Default") { m.setLibraryDir(PrompterModel.defaultScriptsDir) }
-                                .help("Back to the built-in library folder")
+                            Button("Use Default Folder") { m.setLibraryDir(PrompterModel.defaultScriptsDir) }
                         }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "folder")
+                            Text(m.usingDefaultLibrary ? "Default library" : m.libraryDir.lastPathComponent)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .font(.system(size: 10.5))
                     }
-                    .controlSize(.small)
+                    .menuStyle(.borderlessButton)
+                    .foregroundColor(.secondary)
+                    .fixedSize()
+                    .help("This folder's .txt files are the library — click to change it\n\(m.libraryDir.path)")
                 }
                 .frame(width: 185)
 
@@ -1452,7 +1457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false
         p.isFloatingPanel = true
-        p.becomesKeyOnlyIfNeeded = true
+        p.becomesKeyOnlyIfNeeded = false   // clicking the note must grab keyboard focus (Esc)
         p.isReleasedWhenClosed = false   // we keep a strong ref; closing only hides
         p.isOpaque = false
         p.backgroundColor = .clear
@@ -1521,6 +1526,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let saveItem = NSMenuItem(title: "Save Script", action: #selector(saveFromMenu), keyEquivalent: "s")
         saveItem.target = self
         file.addItem(saveItem)
+        file.addItem(.separator())
+        let libItem = NSMenuItem(title: "Scripts Library…", action: #selector(libraryFromMenu), keyEquivalent: "l")
+        libItem.target = self
+        file.addItem(libItem)
         fileItem.submenu = file
 
         let editItem = NSMenuItem(); main.addItem(editItem)
@@ -1546,11 +1555,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard !model.editing else { return }
         model.saveCurrentScript()
     }
+    @objc func libraryFromMenu() {
+        guard !model.editing else { return }
+        if model.live { model.enterEdit() }
+        model.editing = true
+    }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(openFromMenu) || menuItem.action == #selector(saveFromMenu)
             || menuItem.action == #selector(toggleMode) || menuItem.action == #selector(toggleMicFromMenu)
-            || menuItem.action == #selector(restartFromMenu) {
+            || menuItem.action == #selector(restartFromMenu) || menuItem.action == #selector(libraryFromMenu) {
             return !model.editing
         }
         return true
@@ -1645,8 +1659,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard !model.editing else { return }
         showNote()   // a hot mic with the note hidden is a dead end
         if !model.live {
-            model.goLive()   // tracking needs committed tokens
-            guard model.live else { return }   // empty script: goLive already said why
+            model.goLive()   // tracking needs committed tokens; goLive auto-starts the mic
+            return           // (empty script: goLive already said why it refused)
         }
         model.toggleMic()
     }
@@ -1665,12 +1679,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // app quits via "last window closed"). Buttons are hidden/shown instead.
         if !live {
             NSApp.activate(ignoringOtherApps: true)
-            p.makeKeyAndOrderFront(nil)
         }
+        p.makeKeyAndOrderFront(nil)
         // click-through only ever applies in live mode; the setting itself
         // survives mode switches and relaunches
         p.ignoresMouseEvents = live && model.clickThrough
-        p.becomesKeyOnlyIfNeeded = live
+        // the note must be able to take keyboard focus on click in BOTH modes,
+        // otherwise Esc/arrow keys silently stop working the moment another
+        // window becomes key ("Esc sometimes doesn't exit live mode")
+        p.becomesKeyOnlyIfNeeded = false
         for b: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
             p.standardWindowButton(b)?.isHidden = live
         }
@@ -1698,7 +1715,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if let fr = self.panel.firstResponder, fr is NSTextView { return ev }
             guard self.model.live else { return ev }
             switch ev.charactersIgnoringModifiers?.lowercased() {
-            case " ": self.model.toggleMic(); return nil
             case "r": self.model.restartFromTop(); return nil
             case "e": self.model.enterEdit(); return nil
             default: break
@@ -1723,6 +1739,7 @@ func runSelfTest() {
     m.sourceBaseline = nil
     m.libraryBaseline = nil
     m.alertsEnabled = false     // headless: every confirmation counts as Cancel
+    m.autoListen = false        // headless: goLive must not touch the mic
     m.script = PrompterModel.sample
     m.rebuild()
     var fails = 0

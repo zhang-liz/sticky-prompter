@@ -86,13 +86,12 @@ Open **http://localhost:4173** in Chrome.
 ## Quick start
 
 1. **Type or paste your script** straight onto the note (or press <kbd>⌘O</kbd> to open a `.txt`, `.md`, or `.docx` file)
-2. Hit **Go Live** (or <kbd>Esc</kbd>) — the controls disappear, leaving just your words
-3. Press <kbd>space</kbd> and start reading — the highlight follows your voice
+2. Hit **Go Live** (or <kbd>Esc</kbd>) — the controls disappear and the mic starts listening
+3. Start reading — the highlight follows your voice
 4. Drag the note right under your camera; your audience never sees it
 
 | Key (live mode) | Action |
 |---|---|
-| <kbd>space</kbd> | mic on / off |
 | <kbd>←</kbd> / <kbd>→</kbd> | nudge back / forward a word |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | jump about a line |
 | <kbd>R</kbd> | restart from the top |
