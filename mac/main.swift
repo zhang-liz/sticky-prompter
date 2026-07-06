@@ -1147,7 +1147,7 @@ struct ContentView: View {
                 .kerning(0.8)
                 .lineLimit(1)
                 .layoutPriority(1)   // don't let the controls squeeze the name to one letter
-                .foregroundColor(mainColor.opacity(0.55))
+                .foregroundColor(.primary.opacity(0.6))
             Spacer(minLength: 6)
             HStack(spacing: 1) {
                 ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
@@ -1156,11 +1156,16 @@ struct ContentView: View {
             ColorPicker("", selection: bgBinding)
                 .labelsHidden()
                 .frame(width: 26)
-                .help("Background color")
-            Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
-                .controlSize(.mini)
-                .frame(width: 68)
-                .help("Background transparency")
+                .help("Note color")
+            HStack(spacing: 4) {
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.primary.opacity(0.55))
+                Slider(value: Binding(get: { m.bgOpacity }, set: { m.bgOpacity = $0; m.persist() }), in: 0.05...1)
+                    .controlSize(.mini)
+                    .frame(width: 64)
+            }
+            .help("Note transparency — drag left to see through the note (\(Int(m.bgOpacity * 100))%)")
             Divider().frame(height: 14).opacity(0.4)
             ctl(m.autoScroll ? "timer" : "mic",
                 help: m.autoScroll ? "Auto-scroll at a steady pace — click to switch to voice tracking"
@@ -1190,7 +1195,7 @@ struct ContentView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .foregroundColor(mainColor.opacity(0.7))
+                .foregroundColor(.primary.opacity(0.7))
                 .help("Recent files")
             }
             Button { m.goLive() } label: {
@@ -1220,8 +1225,10 @@ struct ContentView: View {
         }
     }
 
+    // bar controls sit on system material, not on the note color — use the
+    // standard label color so they stay readable on any note color
     func ctl(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        CtlButton(symbol: symbol, help: help, color: mainColor, action: action)
+        CtlButton(symbol: symbol, help: help, color: .primary, action: action)
     }
 
     var footer: some View {
@@ -1230,7 +1237,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     CtlButton(symbol: m.autoPaused ? "play.fill" : "pause.fill",
                               help: m.autoPaused ? "Start scrolling" : "Pause",
-                              color: mainColor) {
+                              color: .primary) {
                         m.toggleAutoPlay()
                     }
                     Slider(value: Binding(get: { m.wpm },
@@ -1241,7 +1248,7 @@ struct ContentView: View {
                         .help("Auto-scroll speed")
                     Text("\(Int(m.wpm)) wpm")
                         .font(.system(size: 10.5, weight: .medium))
-                        .foregroundColor(mainColor.opacity(0.65))
+                        .foregroundColor(.primary.opacity(0.75))
                         .monospacedDigit()
                 }
                 .padding(.horizontal, 8)
@@ -1257,7 +1264,7 @@ struct ContentView: View {
             if !hint.isEmpty {
                 Text(hint)
                     .font(.system(size: 10.5, weight: .medium))
-                    .foregroundColor(mainColor.opacity(0.65))
+                    .foregroundColor(.primary.opacity(0.75))
                     .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
