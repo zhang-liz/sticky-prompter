@@ -1,8 +1,6 @@
 # Sticky Prompter — web version
 
-The browser version of Sticky Prompter. It runs in Chrome and uses the Web Speech API for voice tracking and Document Picture-in-Picture for an always-on-top floating note.
-
-No build step, no dependencies, and no data leaves your machine beyond the browser's own speech recognition.
+A full-screen browser teleprompter. Paste your script, pick a reading mode, and read — no install, no floating window, nothing leaves your machine.
 
 ## Try it now
 
@@ -15,38 +13,33 @@ cd web
 python3 -m http.server 4173
 ```
 
-Open **http://localhost:4173** in **Chrome** (or Edge). Chrome is required for the two key APIs:
-
-- **Web Speech API** — free real-time speech recognition for voice tracking
-- **Document Picture-in-Picture** — the always-on-top floating window
+Open **http://localhost:4173** in any modern browser. Voice mode additionally needs **Chrome or Edge** (Web Speech API); steady mode works everywhere.
 
 ## How to use
 
-1. Paste your script (or click *Load sample script*) → **Create sticky note**
-2. Click the **pop-out button (⧉)** on the note — it becomes a mini window that stays on top of every app, including your video call. Park it right under your camera so your eyes stay near the lens.
-3. Hit the **mic** and just read. Click any word to jump the tracker there.
+1. **Paste your script** into the text panel on the left.
+2. Pick a **mode** in the top bar:
+   - **Steady** — scrolls line by line at a speed you set (words-per-minute slider). Works in every browser.
+   - **Voice** — follows along as you read aloud, highlighting where you are. Chrome/Edge only, asks for mic permission.
+3. Hit **Start** (or <kbd>Space</kbd>). Click any word to jump there.
 
 ### Controls
 
-| Key | Action |
+| Control | What it does |
 |---|---|
-| `space` | mic on/off (or play/pause in auto-scroll mode) |
-| `←` / `→` | nudge position by a word |
-| `↑` / `↓` | jump ~a line back/forward |
-| `R` | restart from top |
-| `E` | edit script |
-
-### Settings (gear icon)
-
-- **Themes:** classic yellow sticky, pink, or dark glass
-- **Handwritten or clean font**, text size, note width
-- **Opacity** slider (applies to the on-page note; the pop-out window is always readable)
-- **Auto-scroll mode** with speed slider — timed fallback for browsers without speech support
-- **10 recognition languages**
+| **Steady / Voice** | choose auto-scroll or voice tracking |
+| **Speed** | words per minute (steady mode) |
+| **Flip ⇋ / ⥯** | mirror left–right (for a beam-splitter glass rig) and/or flip upside-down |
+| **✎ Text** | show / hide the script panel for a clean full-screen read |
+| **Size** | prompter font size |
+| <kbd>Space</kbd> | start / pause |
+| <kbd>Esc</kbd> | stop and return to the top |
+| <kbd>↑</kbd> <kbd>↓</kbd> | nudge back / forward a few words |
 
 Script and all settings persist in `localStorage`.
 
-## Notes & limits
+## Notes
 
-- The pop-out window is always-on-top but has an opaque background (Chrome doesn't allow transparent PiP windows). For a true see-through overlay, use the native macOS app in [`mac/`](../mac/).
-- Chrome's speech recognition restarts automatically after silence; the app handles this so the mic stays hot until you turn it off.
+- **Flip** is for physical teleprompter rigs: a beam-splitter glass needs the horizontal mirror so the reflection reads correctly; upside-down helps some mounts.
+- Everything runs client-side. Voice mode uses the browser's own on-device/cloud speech recognition; nothing is sent anywhere by this app.
+- For a floating, always-on-top, screen-share-invisible overlay, use the native macOS app in [`mac/`](../mac/).

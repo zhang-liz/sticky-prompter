@@ -1,575 +1,251 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sticky Prompter</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sticky Prompter — web teleprompter</title>
 <style>
   :root {
-    --note-w: 380px;
-    --fs: 22px;
-    --note-alpha: 1;
-    --accent: #ffd60a;
-    --accent-deep: #f7b500;
-    --ink: #f5f5f7;
-    --ink-2: #a1a1aa;
-    --ink-3: #6e6e78;
-    --hairline: rgba(255,255,255,.09);
-    --glass: rgba(255,255,255,.05);
+    --bg: #0b0d12;
+    --panel: #141821;
+    --panel-2: #1c212c;
+    --line: #2a303c;
+    --text: #eef2f8;
+    --dim: #8a93a3;
+    --accent: #7fb5ff;
+    --accent-fg: #06101f;
+    --read: #59657a;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-    background:
-      radial-gradient(1000px 700px at 85% -10%, rgba(94, 92, 230, .14) 0%, transparent 60%),
-      radial-gradient(900px 640px at -10% 110%, rgba(255, 159, 10, .09) 0%, transparent 60%),
-      #0a0a0d;
-    min-height: 100vh;
-    color: var(--ink);
-    -webkit-font-smoothing: antialiased;
-  }
-  ::selection { background: rgba(255, 214, 10, .3); }
-
-  /* ---------- Landing / setup panel ---------- */
-  .setup {
-    max-width: 620px;
-    margin: 0 auto;
-    padding: 72px 24px 120px;
-  }
-  .hero { text-align: center; margin-bottom: 36px; }
-  .hero .logo {
-    width: 58px; height: 58px; border-radius: 15px;
-    background: linear-gradient(145deg, #ffe58a, #f7b733);
-    box-shadow:
-      0 12px 28px rgba(247, 183, 51, .28),
-      0 2px 6px rgba(0,0,0,.4),
-      inset 0 1px 0 rgba(255,255,255,.5);
-    display: inline-block; position: relative;
-    margin-bottom: 18px;
-  }
-  .hero .logo::before {
-    content: ""; position: absolute; left: 13px; right: 13px; top: 16px;
-    height: 4px; border-radius: 2px;
-    background: rgba(96, 66, 0, .38);
-    box-shadow: 0 9px 0 rgba(96, 66, 0, .30), 0 18px 0 -1px rgba(96, 66, 0, .22);
-  }
-  .hero h1 {
-    font-size: 34px; font-weight: 700; letter-spacing: -0.03em;
-  }
-  .hero p.sub {
-    color: var(--ink-2); margin: 12px auto 0; line-height: 1.55;
-    font-size: 16px; max-width: 46ch;
-  }
-
-  .card {
-    background: var(--glass);
-    border: 1px solid var(--hairline);
-    border-radius: 20px;
-    padding: 22px;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 24px 60px rgba(0,0,0,.35);
-  }
-  .setup label {
-    display: block; font-size: 13px; font-weight: 600;
-    color: var(--ink-2); margin: 0 0 8px 2px;
-    text-transform: uppercase; letter-spacing: .05em; font-size: 11px;
-  }
-  .setup textarea {
-    width: 100%; min-height: 220px; resize: vertical;
-    background: rgba(0,0,0,.28); color: var(--ink);
-    border: 1px solid var(--hairline); border-radius: 12px;
-    padding: 14px 16px; font-size: 15px; line-height: 1.6;
-    font-family: inherit;
-    transition: border-color .15s, box-shadow .15s;
-  }
-  .setup textarea::placeholder { color: var(--ink-3); }
-  .setup textarea:focus {
-    outline: none; border-color: rgba(255, 214, 10, .55);
-    box-shadow: 0 0 0 3.5px rgba(255, 214, 10, .18);
-  }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
-  button.primary {
-    background: linear-gradient(180deg, var(--accent), var(--accent-deep));
-    color: #241a00;
-    border: none; border-radius: 12px; padding: 12px 22px;
-    font-size: 15px; font-weight: 600; font-family: inherit; cursor: pointer;
-    box-shadow: 0 6px 18px rgba(247, 181, 0, .28), inset 0 1px 0 rgba(255,255,255,.35);
-    transition: transform .15s cubic-bezier(.2,.9,.3,1.4), filter .15s, box-shadow .15s;
-  }
-  button.primary:hover { filter: brightness(1.06); box-shadow: 0 8px 22px rgba(247, 181, 0, .36), inset 0 1px 0 rgba(255,255,255,.35); }
-  button.primary:active { transform: scale(.97); }
-  button.ghost {
-    background: rgba(255,255,255,.06); color: var(--ink);
-    border: 1px solid var(--hairline);
-    border-radius: 12px; padding: 11.5px 18px; font-size: 15px; font-weight: 500;
-    font-family: inherit; cursor: pointer;
-    transition: background .15s, transform .15s cubic-bezier(.2,.9,.3,1.4);
-  }
-  button.ghost:hover { background: rgba(255,255,255,.1); }
-  button.ghost:active { transform: scale(.97); }
-
-  .tips {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
-    margin-top: 14px;
-  }
-  @media (max-width: 560px) { .tips { grid-template-columns: 1fr; } }
-  .tip {
-    background: var(--glass);
-    border: 1px solid var(--hairline);
-    border-radius: 16px; padding: 16px;
-  }
-  .tip svg {
-    width: 20px; height: 20px; margin-bottom: 9px;
-    fill: none; stroke: var(--accent); stroke-width: 1.8;
-    stroke-linecap: round; stroke-linejoin: round;
-  }
-  .tip h3 { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; letter-spacing: -0.01em; }
-  .tip p { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
-  .tip b { color: var(--ink); font-weight: 600; }
-
-  .keys {
-    margin-top: 14px; padding: 13px 16px;
-    background: var(--glass); border: 1px solid var(--hairline); border-radius: 16px;
-    font-size: 12.5px; color: var(--ink-2); line-height: 2;
-    display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center;
-  }
-  .keys span { white-space: nowrap; }
-  kbd {
-    background: rgba(255,255,255,.09); border: 1px solid var(--hairline);
-    border-bottom-width: 2px;
-    border-radius: 5px; padding: 1px 6px;
-    font-family: inherit; font-size: 11.5px; color: var(--ink);
-  }
-  .warn { color: #ff8a8a; font-size: 13px; margin-top: 12px; display: none; }
-
-  /* ---------- Sticky note ---------- */
-  #note {
-    position: fixed; top: 90px; left: calc(100vw - var(--note-w) - 48px);
-    width: var(--note-w);
-    max-height: 70vh;
-    display: none;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
     flex-direction: column;
-    border-radius: 16px;
-    border: 1px solid transparent;
-    box-shadow: 0 24px 48px rgba(0,0,0,.42), 0 4px 12px rgba(0,0,0,.26);
+    height: 100vh;
     overflow: hidden;
-    z-index: 100;
-  }
-  @keyframes noteIn {
-    from { opacity: 0; transform: translateY(10px) scale(.97); }
-    to   { opacity: 1; transform: none; }
-  }
-  #note.visible { display: flex; animation: noteIn .32s cubic-bezier(.2,.9,.3,1); }
-  #note.pip {
-    position: static; width: 100%; height: 100vh; max-height: none;
-    box-shadow: none; border-radius: 0; border: none; animation: none;
   }
 
-  /* themes */
-  #note[data-theme="yellow"] {
-    background: linear-gradient(170deg,
-      rgba(255, 224, 96, var(--note-alpha)),
-      rgba(249, 199, 58, var(--note-alpha)));
-    color: #42350f;
-    border-color: rgba(255,255,255,.35);
+  /* ---------- top bar ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
   }
-  #note[data-theme="pink"] {
-    background: linear-gradient(170deg,
-      rgba(255, 201, 222, var(--note-alpha)),
-      rgba(249, 172, 200, var(--note-alpha)));
-    color: #5a1c36;
-    border-color: rgba(255,255,255,.4);
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: .2px; }
+  .brand svg { width: 22px; height: 22px; }
+  .spacer { flex: 1 1 auto; }
+
+  .group { display: flex; align-items: center; gap: 4px; background: var(--panel-2); border-radius: 10px; padding: 3px; }
+  .group .lbl { font-size: 11px; color: var(--dim); padding: 0 8px 0 6px; text-transform: uppercase; letter-spacing: .5px; }
+
+  button, .seg {
+    font: inherit;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
   }
-  #note[data-theme="dark"] {
-    background: rgba(22, 22, 27, calc(var(--note-alpha) * 0.88));
-    color: var(--ink);
-    border-color: rgba(255,255,255,.12);
-    backdrop-filter: blur(28px) saturate(160%);
-    -webkit-backdrop-filter: blur(28px) saturate(160%);
+  button:hover, .seg:hover { background: rgba(255,255,255,.06); }
+  button svg, .seg svg { width: 16px; height: 16px; }
+  .seg.on { background: var(--accent); color: var(--accent-fg); }
+  .seg.on:hover { background: var(--accent); }
+
+  .primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-weight: 700;
+    padding: 9px 18px;
+  }
+  .primary:hover { background: #9cc6ff; }
+  .primary:disabled { opacity: .4; cursor: default; background: var(--accent); }
+
+  .slider { display: flex; align-items: center; gap: 8px; }
+  input[type=range] { accent-color: var(--accent); width: 120px; }
+  .wpm { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12px; min-width: 58px; }
+
+  /* ---------- main split ---------- */
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  /* editor pane */
+  .editor { width: 340px; border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--panel); }
+  .editor h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); margin: 0; padding: 12px 14px 8px; }
+  .editor textarea {
+    flex: 1 1 auto;
+    resize: none;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font: 15px/1.6 inherit;
+    padding: 0 14px 14px;
+  }
+  .editor textarea::placeholder { color: var(--dim); }
+  .editor.collapsed { width: 0; border-right: none; overflow: hidden; }
+
+  /* prompter pane */
+  .stage { flex: 1 1 auto; position: relative; overflow: hidden; background: #000; }
+  .prompter {
+    position: absolute; inset: 0;
+    overflow-y: auto;
+    padding: 18vh 8% 40vh;
+    scroll-behavior: smooth;
+    transition: transform .15s ease;
+  }
+  .prompter::-webkit-scrollbar { width: 0; }
+  .line { font-size: var(--fs, 44px); font-weight: 600; line-height: 1.35; margin: 0 0 .1em; }
+  .line.gap { margin-bottom: .8em; }
+  .w { color: var(--text); transition: color .1s; cursor: pointer; }
+  .w.read { color: var(--read); }
+  .w.cur { color: var(--accent-fg); background: var(--accent); border-radius: 4px; padding: 0 2px; }
+  /* line mode: whole current line lit, past lines stay bright */
+  .prompter.linemode .w.read { color: var(--text); }
+  .prompter.linemode .line.curline .w { color: var(--accent-fg); background: var(--accent); border-radius: 4px; }
+
+  /* center guide line near the top third */
+  .stage::after {
+    content: "";
+    position: absolute; left: 0; right: 0; top: 33%;
+    border-top: 2px solid rgba(127,181,255,.28);
+    pointer-events: none;
   }
 
-  .note-head {
-    display: flex; align-items: center; gap: 3px;
-    padding: 7px 9px;
-    cursor: grab; user-select: none;
-    flex: none;
-  }
-  .note-head:active { cursor: grabbing; }
-  #note.pip .note-head { cursor: default; }
-  #note[data-theme="yellow"] .note-head { background: rgba(120, 90, 0, .10); box-shadow: inset 0 -1px 0 rgba(120,90,0,.08); }
-  #note[data-theme="pink"] .note-head { background: rgba(140, 40, 80, .09); box-shadow: inset 0 -1px 0 rgba(140,40,80,.08); }
-  #note[data-theme="dark"] .note-head { background: rgba(255,255,255,.05); box-shadow: inset 0 -1px 0 rgba(255,255,255,.07); }
+  /* progress */
+  .prog { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); width: 0; transition: width .2s; }
 
-  .note-head .grip { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 4px; }
-  .note-head .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: currentColor; opacity: .22; flex: none;
-    transition: background .2s, opacity .2s;
+  .empty {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: var(--dim); gap: 10px; text-align: center; pointer-events: none;
+    font-size: 16px;
   }
-  .note-head .dot.live { background: #ff453a; opacity: 1; animation: pulse 1.4s infinite; }
-  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,69,58,.45);} 50% { box-shadow: 0 0 0 5px rgba(255,69,58,0);} }
-  .note-head .title {
-    font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
-    opacity: .5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
+  .empty svg { width: 42px; height: 42px; opacity: .5; }
 
-  .ibtn {
-    border: none; background: transparent; color: inherit;
-    width: 28px; height: 26px; border-radius: 7px; cursor: pointer;
-    display: inline-flex; align-items: center; justify-content: center;
-    opacity: .6; flex: none; padding: 0;
-    transition: opacity .12s, background .12s;
-  }
-  .ibtn:hover { opacity: 1; background: rgba(0,0,0,.09); }
-  .ibtn:active { opacity: 1; background: rgba(0,0,0,.14); }
-  #note[data-theme="dark"] .ibtn:hover { background: rgba(255,255,255,.1); }
-  #note[data-theme="dark"] .ibtn:active { background: rgba(255,255,255,.15); }
-  .ibtn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-  .ibtn.mic-on { opacity: 1; color: #ff453a; }
+  .heard { position: absolute; left: 16px; bottom: 14px; color: var(--dim); font-size: 13px; max-width: 70%; }
+  .warn { position: absolute; right: 16px; bottom: 14px; color: #ffb454; font-size: 12px; max-width: 46%; text-align: right; }
 
-  .note-body {
-    flex: 1; overflow-y: auto; scroll-behavior: smooth;
-    padding: 16px 18px 40vh 18px;
-    font-size: var(--fs); line-height: 1.55;
-    font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-weight: 500;
-    overscroll-behavior: contain;
-  }
-  #note.font-note .note-body { font-family: "Marker Felt", "Chalkboard SE", "Segoe Print", "Comic Sans MS", cursive; font-weight: 400; }
-  .note-body::-webkit-scrollbar { width: 8px; }
-  .note-body::-webkit-scrollbar-thumb { background: rgba(0,0,0,.18); border-radius: 99px; background-clip: padding-box; border: 2px solid transparent; }
-  #note[data-theme="dark"] .note-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); background-clip: padding-box; border: 2px solid transparent; }
+  footer { padding: 6px 16px; background: var(--panel); border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; text-align: center; }
+  kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 11px; }
 
-  .line { margin-bottom: .35em; }
-  .line.gap { margin-bottom: 1em; }
-  .w {
-    cursor: pointer; border-radius: 5px; padding: 0 2px; margin: 0 -1px;
-    transition: opacity .18s, background .15s, color .15s;
+  @media (max-width: 720px) {
+    .editor { width: 240px; }
+    input[type=range] { width: 80px; }
+    .group .lbl { display: none; }
   }
-  .w.read { opacity: .3; }
-  .w.cur {
-    background: #f56300; color: #fff;
-    box-shadow: 0 1px 5px rgba(200, 80, 0, .35);
-  }
-  #note[data-theme="pink"] .w.cur { background: #d92e6f; box-shadow: 0 1px 5px rgba(180, 30, 90, .35); }
-  #note[data-theme="dark"] .w.cur { background: var(--accent); color: #241a00; box-shadow: 0 1px 6px rgba(255, 214, 10, .4); }
-
-  .note-foot {
-    flex: none; padding: 4px 12px 6px;
-    font-size: 11.5px; font-weight: 500; opacity: .55;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    min-height: 22px;
-  }
-  .progress {
-    height: 4px; flex: none; margin: 0 12px 10px;
-    background: rgba(0,0,0,.12); border-radius: 99px; overflow: hidden;
-  }
-  #note[data-theme="dark"] .progress { background: rgba(255,255,255,.12); }
-  .progress > div { height: 100%; width: 0%; background: #f56300; border-radius: 99px; transition: width .3s; }
-  #note[data-theme="pink"] .progress > div { background: #d92e6f; }
-  #note[data-theme="dark"] .progress > div { background: var(--accent); }
-
-  /* ---------- settings popover ---------- */
-  .settings {
-    position: absolute; top: 40px; right: 8px; z-index: 10;
-    width: 248px; padding: 14px 15px;
-    background: rgba(28, 28, 33, .88); color: var(--ink);
-    border: 1px solid rgba(255,255,255,.12); border-radius: 14px;
-    box-shadow: 0 18px 44px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.3);
-    backdrop-filter: blur(30px) saturate(180%);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
-    display: none;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-    font-size: 13px;
-    cursor: default;
-    transform-origin: top right;
-  }
-  @keyframes popIn {
-    from { opacity: 0; transform: scale(.94) translateY(-4px); }
-    to   { opacity: 1; transform: none; }
-  }
-  .settings.open { display: block; animation: popIn .16s cubic-bezier(.2,.9,.3,1); }
-  .settings .sec { margin-bottom: 13px; }
-  .settings .sec:last-child { margin-bottom: 2px; }
-  .settings .lab {
-    font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--ink-2); margin-bottom: 6px;
-  }
-  .settings input[type=range] { width: 100%; accent-color: var(--accent); height: 18px; }
-  .seg {
-    display: flex; gap: 2px; padding: 2px;
-    background: rgba(255,255,255,.07); border-radius: 8px;
-  }
-  .seg button {
-    flex: 1; padding: 5px 0; font-size: 12px; font-weight: 500; font-family: inherit;
-    cursor: pointer; background: transparent; color: var(--ink-2);
-    border: none; border-radius: 6px;
-    transition: background .15s, color .15s;
-  }
-  .seg button:hover { color: var(--ink); }
-  .seg button.on {
-    background: rgba(255,255,255,.16); color: var(--ink); font-weight: 600;
-    box-shadow: 0 1px 3px rgba(0,0,0,.3);
-  }
-  .settings select {
-    width: 100%; padding: 6px 10px; border-radius: 8px;
-    background: rgba(255,255,255,.07); color: var(--ink);
-    border: 1px solid var(--hairline); font-size: 13px; font-family: inherit;
-    appearance: none; -webkit-appearance: none;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23a1a1aa' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-    background-repeat: no-repeat; background-position: right 10px center;
-  }
-  .settings select:focus { outline: none; border-color: rgba(255,214,10,.5); }
-  .settings select option { background: #1c1c21; }
-
-  /* ---------- editor overlay ---------- */
-  .editor-ov {
-    position: fixed; inset: 0; z-index: 200;
-    background: rgba(8, 8, 12, .6);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    display: none; align-items: center; justify-content: center; padding: 24px;
-  }
-  .editor-ov.open { display: flex; }
-  @keyframes sheetIn {
-    from { opacity: 0; transform: translateY(14px) scale(.98); }
-    to   { opacity: 1; transform: none; }
-  }
-  .editor-card {
-    width: min(680px, 100%);
-    background: rgba(26, 26, 32, .92);
-    border: 1px solid rgba(255,255,255,.11); border-radius: 20px; padding: 22px;
-    backdrop-filter: blur(30px) saturate(160%);
-    -webkit-backdrop-filter: blur(30px) saturate(160%);
-    box-shadow: 0 30px 80px rgba(0,0,0,.5);
-    animation: sheetIn .22s cubic-bezier(.2,.9,.3,1);
-  }
-  .editor-card h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 14px; }
-  .editor-card textarea {
-    width: 100%; min-height: 300px; resize: vertical;
-    background: rgba(0,0,0,.3); color: var(--ink);
-    border: 1px solid var(--hairline); border-radius: 12px;
-    padding: 14px 16px; font-size: 15px; line-height: 1.6; font-family: inherit;
-    transition: border-color .15s, box-shadow .15s;
-  }
-  .editor-card textarea:focus {
-    outline: none; border-color: rgba(255, 214, 10, .55);
-    box-shadow: 0 0 0 3.5px rgba(255, 214, 10, .18);
-  }
-  .editor-card .row { justify-content: flex-end; margin-top: 14px; }
 </style>
 </head>
 <body>
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="2" width="18" height="20" rx="4" fill="#141821" stroke="#2a303c"/><rect x="10" y="6" width="4" height="8" rx="2" fill="#7fb5ff"/><path d="M8 12a4 4 0 0 0 8 0M12 16v3M9.5 19h5" stroke="#7fb5ff" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>
+      Sticky Prompter
+    </div>
 
-<div class="setup" id="setup">
-  <header class="hero">
-    <span class="logo"></span>
-    <h1>Sticky Prompter</h1>
-    <p class="sub">A voice-controlled sticky note that floats over your video calls and recordings. It listens as you speak and follows along — no scrolling, no clicking.</p>
+    <div class="group" role="group" aria-label="Mode">
+      <span class="lbl">Mode</span>
+      <button class="seg on" id="modeSteady">Steady</button>
+      <button class="seg" id="modeVoice">Voice</button>
+    </div>
+
+    <div class="group slider" id="speedGroup">
+      <span class="lbl">Speed</span>
+      <input type="range" id="wpm" min="60" max="260" step="5" value="140" aria-label="Words per minute">
+      <span class="wpm"><span id="wpmVal">140</span> wpm</span>
+    </div>
+
+    <div class="group" role="group" aria-label="Flip">
+      <span class="lbl">Flip</span>
+      <button class="seg" id="flipH" title="Mirror left–right (for teleprompter glass)">⇋</button>
+      <button class="seg" id="flipV" title="Flip upside-down">⥯</button>
+    </div>
+
+    <button id="toggleEditor" title="Show / hide the text panel">✎ Text</button>
+
+    <div class="spacer"></div>
+
+    <div class="group slider">
+      <span class="lbl">Size</span>
+      <input type="range" id="fontSize" min="24" max="96" step="2" value="44" aria-label="Font size">
+    </div>
+
+    <button class="primary" id="goBtn">▶ Start</button>
   </header>
 
-  <div class="card">
-    <label for="scriptInput">Your script</label>
-    <textarea id="scriptInput" placeholder="Paste your script here…&#10;&#10;Blank lines become paragraph breaks."></textarea>
-    <div class="row">
-      <button class="primary" id="startBtn">Create Sticky Note</button>
-      <button class="ghost" id="sampleBtn">Load Sample Script</button>
-    </div>
-    <p class="warn" id="speechWarn">⚠️ Voice tracking needs Chrome (or Edge) — this browser doesn't support the Web Speech API. Timed auto-scroll will still work.</p>
-  </div>
+  <main>
+    <section class="editor" id="editor">
+      <h2>Your script — paste it here</h2>
+      <textarea id="scriptInput" placeholder="Paste or type your script here.
 
-  <div class="tips">
-    <div class="tip">
-      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><rect x="12" y="3" width="9" height="7" rx="1.5"/></svg>
-      <h3>Float it over your call</h3>
-      <p>Click the <b>pop-out button</b> on the note — it becomes an always-on-top mini window that floats over Zoom, Meet, or anything else. Park it right under your camera.</p>
-    </div>
-    <div class="tip">
-      <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-      <h3>Voice tracking</h3>
-      <p>Hit the <b>mic</b>, then just read. Words dim as you say them — pause, ad-lib, or skip a sentence and it catches up. Click any word to jump there.</p>
-    </div>
-  </div>
+Then hit Start. In Steady mode it scrolls at your chosen speed; in Voice mode it follows along as you read aloud. Click any word to jump there."></textarea>
+    </section>
 
-  <div class="keys">
-    <span><kbd>space</kbd> mic on/off</span>
-    <span><kbd>←</kbd> <kbd>→</kbd> nudge position</span>
-    <span><kbd>R</kbd> restart</span>
-    <span><kbd>E</kbd> edit script</span>
-  </div>
-</div>
+    <section class="stage">
+      <div class="prompter" id="prompter"></div>
+      <div class="empty" id="empty">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 10h16M4 14h10M4 18h13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <div>Paste your script on the left, then press Start</div>
+      </div>
+      <div class="heard" id="heardLine"></div>
+      <div class="warn" id="speechWarn" style="display:none">Voice mode needs Chrome or Edge. Steady mode works everywhere.</div>
+      <div class="prog" id="progBar"></div>
+    </section>
+  </main>
 
-<!-- The sticky note -->
-<div id="note" data-theme="yellow">
-  <div class="note-head" id="noteHead">
-    <div class="grip">
-      <span class="dot" id="liveDot"></span>
-      <span class="title" id="noteTitle">Sticky Prompter</span>
-    </div>
-    <button class="ibtn" id="micBtn" title="Start/stop voice tracking (space)">
-      <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-    </button>
-    <button class="ibtn" id="restartBtn" title="Restart from top (R)">
-      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>
-    </button>
-    <button class="ibtn" id="editBtn" title="Edit script (E)">
-      <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-    </button>
-    <button class="ibtn" id="gearBtn" title="Settings">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>
-    </button>
-    <button class="ibtn" id="pipBtn" title="Pop out — float on top of every app">
-      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><rect x="12" y="3" width="9" height="7" rx="1.5"/></svg>
-    </button>
-
-    <div class="settings" id="settingsPanel">
-      <div class="sec">
-        <div class="lab">Theme</div>
-        <div class="seg" id="themeSeg">
-          <button data-theme="yellow">Yellow</button>
-          <button data-theme="pink">Pink</button>
-          <button data-theme="dark">Dark</button>
-        </div>
-      </div>
-      <div class="sec">
-        <div class="lab">Font</div>
-        <div class="seg" id="fontSeg">
-          <button data-font="clean">Clean</button>
-          <button data-font="note">Handwritten</button>
-        </div>
-      </div>
-      <div class="sec">
-        <div class="lab">Text size — <span id="fsVal"></span></div>
-        <input type="range" id="fsRange" min="14" max="44" step="1">
-      </div>
-      <div class="sec">
-        <div class="lab">Note width</div>
-        <input type="range" id="wRange" min="240" max="640" step="10">
-      </div>
-      <div class="sec">
-        <div class="lab">Opacity (on-page note)</div>
-        <input type="range" id="alphaRange" min="0.3" max="1" step="0.05">
-      </div>
-      <div class="sec">
-        <div class="lab">Mode</div>
-        <div class="seg" id="modeSeg">
-          <button data-mode="voice">Voice</button>
-          <button data-mode="timer">Auto-scroll</button>
-        </div>
-      </div>
-      <div class="sec" id="speedSec" style="display:none">
-        <div class="lab">Scroll speed</div>
-        <input type="range" id="speedRange" min="10" max="120" step="5">
-      </div>
-      <div class="sec">
-        <div class="lab">Language</div>
-        <select id="langSel">
-          <option value="en-US">English (US)</option>
-          <option value="en-GB">English (UK)</option>
-          <option value="es-ES">Español</option>
-          <option value="fr-FR">Français</option>
-          <option value="de-DE">Deutsch</option>
-          <option value="pt-BR">Português (BR)</option>
-          <option value="zh-CN">中文 (普通话)</option>
-          <option value="ja-JP">日本語</option>
-          <option value="ko-KR">한국어</option>
-          <option value="hi-IN">हिन्दी</option>
-        </select>
-      </div>
-    </div>
-  </div>
-
-  <div class="note-body" id="noteBody"></div>
-  <div class="note-foot" id="heardLine"></div>
-  <div class="progress"><div id="progBar"></div></div>
-</div>
-
-<!-- Script editor overlay -->
-<div class="editor-ov" id="editorOv">
-  <div class="editor-card">
-    <h2>Edit Script</h2>
-    <textarea id="editorTa"></textarea>
-    <div class="row">
-      <button class="ghost" id="editorCancel">Cancel</button>
-      <button class="primary" id="editorSave">Save &amp; Restart</button>
-    </div>
-  </div>
-</div>
+  <footer>
+    <kbd>Space</kbd> start / pause · <kbd>Esc</kbd> stop · <kbd>↑</kbd><kbd>↓</kbd> nudge · click a word to jump · everything stays in your browser
+  </footer>
 
 <script>
-(() => {
-  'use strict';
-
-  const $ = id => document.getElementById(id);
-  const LS_KEY = 'stickyPrompter.v1';
-
-  const SAMPLE = `Hey everyone, welcome back to the channel!
-
-Today I want to show you something I have been really excited about. We are going to build a tiny app together, and by the end of this video you will be able to ship your own version in under an hour.
-
-Before we dive in, a quick note. Everything I show today is free and open source, and the link to the full code is in the description below.
-
-Okay, let's get started. The first thing we need to do is open the terminal and create a new project folder.`;
-
-  // ---------- state ----------
-  const App = {
-    tokens: [],        // { norm, el }
-    pos: 0,
-    prevPainted: 0,
-    listening: false,
-    wantListening: false,
-    anchor: 0,          // pos at the start of the current utterance
-    pending: [],        // recent unmatched spoken words (for skip detection)
-    discardUtterance: false,
-    recognition: null,
-    mode: 'voice',
-    timerRAF: null,
-    pipWin: null,
-    settings: {
-      theme: 'yellow', font: 'clean', fs: 22, width: 380,
-      alpha: 1, mode: 'voice', speed: 40, lang: 'en-US',
-      script: '', noteX: null, noteY: null,
-    },
-  };
-  window.App = App; // debug handle
-
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const LS_KEY = "stickyPrompterWeb";
   const LOOKAHEAD = 12;
+
+  const App = {
+    tokens: [], rows: [], pos: 0, prevPainted: 0,
+    anchor: 0, pending: [], discardUtterance: false,
+    mode: "steady",          // "steady" | "voice"
+    running: false,
+    wantListening: false, listening: false,
+    autoTimer: null,
+    settings: { script: "", wpm: 140, fontSize: 44, flipH: false, flipV: false, mode: "steady", lang: "en-US" },
+  };
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) $('speechWarn').style.display = 'block';
 
   // ---------- persistence ----------
-  function save() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(App.settings)); } catch (e) {}
-  }
+  function save() { try { localStorage.setItem(LS_KEY, JSON.stringify(App.settings)); } catch (e) {} }
   function load() {
-    try {
-      const s = JSON.parse(localStorage.getItem(LS_KEY));
-      if (s) Object.assign(App.settings, s);
-    } catch (e) {}
+    try { const s = JSON.parse(localStorage.getItem(LS_KEY)); if (s) Object.assign(App.settings, s); } catch (e) {}
   }
 
-  // ---------- text utils ----------
-  function normalize(w) {
-    return w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
-  }
-  // edit distance <= 1 (fast check); short words must match exactly,
-  // otherwise fillers like "so" fuzzy-match "to" and jump the tracker
+  // ---------- text utils (same matcher as the macOS app) ----------
+  function normalize(w) { return w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, ''); }
   function near(a, b) {
     if (a === b) return true;
     const la = a.length, lb = b.length;
     if (la < 4 || lb < 4) return false;
     if (Math.abs(la - lb) > 1) return false;
-    if (la >= 4 && lb >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
+    if (a.startsWith(b) || b.startsWith(a)) return true;
     let i = 0, j = 0, edits = 0;
     while (i < la && j < lb) {
       if (a[i] === b[j]) { i++; j++; continue; }
       if (++edits > 1) return false;
-      if (la > lb) i++;
-      else if (lb > la) j++;
-      else { i++; j++; }
+      if (la > lb) i++; else if (lb > la) j++; else { i++; j++; }
     }
     return edits + (la - i) + (lb - j) <= 1;
   }
@@ -577,49 +253,55 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
   // ---------- render script ----------
   function buildScript(text) {
     App.settings.script = text;
-    App.tokens = [];
-    App.pos = 0;
-    App.prevPainted = 0;
-    App.anchor = 0;
-    App.pending = [];
-    const body = $('noteBody');
+    App.tokens = []; App.rows = [];
+    App.pos = 0; App.prevPainted = 0; App.anchor = 0; App.pending = [];
+    const body = $('prompter');
     body.innerHTML = '';
     const lines = text.split('\n');
     let idx = 0;
     lines.forEach((line, li) => {
       const words = line.trim().split(/\s+/).filter(Boolean);
-      if (!words.length) return; // blank line -> handled via gap class on previous
+      if (!words.length) return;
       const div = document.createElement('div');
       div.className = 'line';
       if (li + 1 < lines.length && lines[li + 1].trim() === '') div.classList.add('gap');
+      const rowStart = idx;
       words.forEach(w => {
         const norm = normalize(w);
         const span = document.createElement('span');
         span.className = 'w';
         span.textContent = w;
         const myIdx = idx;
-        span.addEventListener('click', () => { jumpTo(myIdx); });
+        span.addEventListener('click', () => jumpTo(myIdx));
         div.appendChild(span);
         div.appendChild(document.createTextNode(' '));
-        if (norm) { App.tokens.push({ norm, el: span }); idx++; }
-        else { span.style.opacity = .6; } // pure punctuation token, not tracked
+        if (norm) { App.tokens.push({ norm, el: span, row: App.rows.length }); idx++; }
+        else { span.style.opacity = .5; }
       });
+      if (idx > rowStart) App.rows.push({ start: rowStart, end: idx, el: div });
       body.appendChild(div);
     });
+    $('empty').style.display = App.tokens.length ? 'none' : 'flex';
+    $('goBtn').disabled = !App.tokens.length;
     paint();
     body.scrollTop = 0;
     save();
   }
 
-  // ---------- highlight painting ----------
+  // ---------- highlight ----------
   function paint() {
     const { tokens, pos } = App;
-    const lo = Math.min(App.prevPainted, pos);
-    const hi = Math.max(App.prevPainted, pos);
-    for (let i = Math.max(0, lo - 1); i <= Math.min(tokens.length - 1, hi + 1); i++) {
-      const el = tokens[i].el;
-      el.classList.toggle('read', i < pos);
-      el.classList.toggle('cur', i === pos);
+    const lineMode = App.mode === 'steady';
+    $('prompter').classList.toggle('linemode', lineMode);
+    if (lineMode) {
+      const curRow = tokens[Math.min(pos, tokens.length - 1)] ? tokens[Math.min(pos, tokens.length - 1)].row : -1;
+      App.rows.forEach((r, ri) => r.el.classList.toggle('curline', ri === curRow));
+    } else {
+      const lo = Math.min(App.prevPainted, pos), hi = Math.max(App.prevPainted, pos);
+      for (let i = Math.max(0, lo - 1); i <= Math.min(tokens.length - 1, hi + 1); i++) {
+        tokens[i].el.classList.toggle('read', i < pos);
+        tokens[i].el.classList.toggle('cur', i === pos);
+      }
     }
     App.prevPainted = pos;
     $('progBar').style.width = tokens.length ? (pos / tokens.length * 100) + '%' : '0%';
@@ -627,339 +309,204 @@ Okay, let's get started. The first thing we need to do is open the terminal and 
   }
 
   function scrollToCurrent() {
-    const t = App.tokens[App.pos];
+    const t = App.tokens[Math.min(App.pos, App.tokens.length - 1)];
     if (!t) return;
-    const body = $('noteBody');
+    const body = $('prompter');
     const r = t.el.getBoundingClientRect();
     const c = body.getBoundingClientRect();
-    const target = body.scrollTop + (r.top - c.top) - c.height * 0.35;
-    if (Math.abs(target - body.scrollTop) > 8) body.scrollTop = target;
+    // account for vertical flip: "top third" is measured in flipped space
+    const frac = App.settings.flipV ? 0.67 : 0.33;
+    const target = body.scrollTop + (r.top - c.top) - c.height * frac;
+    if (Math.abs(target - body.scrollTop) > 6) body.scrollTop = target;
   }
 
   function jumpTo(i) {
     App.pos = Math.max(0, Math.min(i, App.tokens.length));
     App.anchor = App.pos;
     App.pending = [];
-    // drop the in-flight utterance so stale words don't re-match from here
     if (App.wantListening) App.discardUtterance = true;
     paint();
   }
 
   // ---------- voice matching ----------
-  // Strict word-by-word tracking:
-  //  - a single spoken word only advances if it matches the NEXT script word
-  //  - jumping ahead (skipped sentence) requires TWO consecutive spoken words
-  //    matching two consecutive script words within the lookahead window
   function consumeWord(raw) {
     const w = normalize(raw);
     if (!w) return;
     const { tokens } = App;
-    if (App.pos < tokens.length && near(w, tokens[App.pos].norm)) {
-      App.pos++;
-      App.pending = [];
-      return;
-    }
-    // one garbled/missed word while otherwise in sync: resync on the next
-    // word — but only on a content word (4+ letters), otherwise fillers
-    // like "to"/"the" skip over unspoken words
-    if (!App.pending.length && App.pos + 1 < tokens.length && w.length >= 4 && near(w, tokens[App.pos + 1].norm)) {
-      App.pos += 2;
-      return;
-    }
+    if (App.pos < tokens.length && near(w, tokens[App.pos].norm)) { App.pos++; App.pending = []; return; }
+    if (!App.pending.length && App.pos + 1 < tokens.length && w.length >= 4 && near(w, tokens[App.pos + 1].norm)) { App.pos += 2; return; }
     App.pending.push(w);
     if (App.pending.length > 4) App.pending.shift();
     if (App.pending.length >= 2) {
-      const a = App.pending[App.pending.length - 2];
-      const b = App.pending[App.pending.length - 1];
+      const a = App.pending[App.pending.length - 2], b = App.pending[App.pending.length - 1];
       const end = Math.min(App.pos + LOOKAHEAD, tokens.length - 1);
       for (let j = App.pos; j < end; j++) {
-        if (near(a, tokens[j].norm) && near(b, tokens[j + 1].norm)) {
-          App.pos = j + 2;
-          App.pending = [];
-          return;
-        }
+        if (near(a, tokens[j].norm) && near(b, tokens[j + 1].norm)) { App.pos = j + 2; App.pending = []; return; }
       }
     }
   }
-  App.consumeWord = consumeWord; // exposed for testing
+  App.consumeWord = consumeWord;
 
   function handleTranscript(words, isFinal) {
-    if (App.discardUtterance) {
-      // user repositioned mid-utterance: ignore this utterance entirely
-      if (isFinal) { App.discardUtterance = false; App.anchor = App.pos; }
-      return;
-    }
-    // Recompute the whole utterance from its anchor — the recognizer keeps
-    // revising earlier interim words, so incremental consumption drifts.
+    if (App.discardUtterance) { if (isFinal) { App.discardUtterance = false; App.anchor = App.pos; } return; }
     App.pos = App.anchor;
     App.pending = [];
     words.forEach(consumeWord);
     if (isFinal) App.anchor = App.pos;
     paint();
     $('heardLine').textContent = App.listening ? '“…' + words.slice(-7).join(' ') + '”' : '';
-    if (App.pos >= App.tokens.length && App.tokens.length) {
-      $('heardLine').textContent = '🎉 End of script';
-    }
+    if (App.pos >= App.tokens.length && App.tokens.length) $('heardLine').textContent = '🎉 End of script';
   }
-  App.handleTranscript = handleTranscript; // exposed for testing
+  App.handleTranscript = handleTranscript;
 
+  let rec = null;
   function initRecognition() {
     if (!SR) return null;
-    const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = App.settings.lang;
-    rec.onresult = (ev) => {
+    const r = new SR();
+    r.continuous = true; r.interimResults = true; r.lang = App.settings.lang;
+    r.onresult = (ev) => {
       const res = ev.results[ev.results.length - 1];
-      const words = res[0].transcript.trim().split(/\s+/).filter(Boolean);
-      handleTranscript(words, res.isFinal);
+      const w = res[0].transcript.trim().split(/\s+/).filter(Boolean);
+      handleTranscript(w, res.isFinal);
     };
-    rec.onend = () => {
-      App.listening = false;
-      if (App.wantListening) {
-        setTimeout(() => { try { rec.start(); App.listening = true; } catch (e) {} }, 250);
-      } else {
-        updateMicUI();
-      }
-    };
-    rec.onerror = (ev) => {
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-        App.wantListening = false;
-        updateMicUI();
-        $('heardLine').textContent = '⚠️ Microphone blocked — allow mic access for this site.';
-      }
-    };
-    return rec;
+    r.onend = () => { App.listening = false; if (App.wantListening) { try { r.start(); App.listening = true; } catch (e) {} } };
+    r.onerror = () => { App.listening = false; };
+    return r;
   }
 
-  function updateMicUI() {
-    const on = App.wantListening;
-    $('micBtn').classList.toggle('mic-on', on && App.mode === 'voice');
-    $('liveDot').classList.toggle('live', on);
-    if (!on && App.mode === 'voice') $('heardLine').textContent = '';
-  }
-
-  function toggleGo() {
-    if (App.mode === 'timer') { toggleTimer(); return; }
-    if (!SR) { $('heardLine').textContent = '⚠️ Voice needs Chrome/Edge — use Auto-scroll mode.'; return; }
-    if (App.wantListening) {
-      App.wantListening = false;
-      try { App.recognition && App.recognition.stop(); } catch (e) {}
-    } else {
-      if (!App.recognition) App.recognition = initRecognition();
-      App.recognition.lang = App.settings.lang;
-      App.anchor = App.pos;
-      App.pending = [];
-      App.discardUtterance = false;
-      try { App.recognition.start(); App.listening = true; App.wantListening = true; } catch (e) {}
-    }
-    updateMicUI();
-  }
-
-  // ---------- timer scroll mode ----------
-  function toggleTimer() {
-    if (App.timerRAF) {
-      cancelAnimationFrame(App.timerRAF);
-      App.timerRAF = null;
-      App.wantListening = false;
-      updateMicUI();
-      return;
-    }
+  function startVoice() {
+    if (!SR) { $('speechWarn').style.display = 'block'; return; }
+    if (!rec) rec = initRecognition();
     App.wantListening = true;
-    updateMicUI();
-    const body = $('noteBody');
-    let last = performance.now();
-    let acc = body.scrollTop;
-    const step = (now) => {
-      acc += App.settings.speed * (now - last) / 1000;
-      last = now;
-      body.scrollTop = acc;
-      App.timerRAF = requestAnimationFrame(step);
-    };
-    App.timerRAF = requestAnimationFrame(step);
+    try { rec.start(); App.listening = true; } catch (e) {}
+    $('heardLine').textContent = 'Listening…';
+  }
+  function stopVoice() {
+    App.wantListening = false; App.listening = false;
+    if (rec) try { rec.stop(); } catch (e) {}
+    $('heardLine').textContent = '';
   }
 
-  // ---------- pop-out (Document Picture-in-Picture) ----------
-  async function popOut() {
-    const note = $('note');
-    if (App.pipWin) { App.pipWin.close(); return; }
-    if (!('documentPictureInPicture' in window)) {
-      alert('Pop-out needs Chrome or Edge 116+ (Document Picture-in-Picture API).');
-      return;
-    }
-    const pip = await documentPictureInPicture.requestWindow({
-      width: App.settings.width,
-      height: 340,
-    });
-    App.pipWin = pip;
-    // copy styles
-    [...document.styleSheets].forEach(ss => {
-      try {
-        const css = [...ss.cssRules].map(r => r.cssText).join('\n');
-        const st = pip.document.createElement('style');
-        st.textContent = css;
-        pip.document.head.appendChild(st);
-      } catch (e) {}
-    });
-    pip.document.title = 'Sticky Prompter';
-    pip.document.body.style.margin = '0';
-    pip.document.body.style.background = 'transparent';
-    note.classList.add('pip');
-    pip.document.body.appendChild(note);
-    bindKeys(pip.document);
-    pip.addEventListener('pagehide', () => {
-      note.classList.remove('pip');
-      document.body.appendChild(note);
-      App.pipWin = null;
-      applyNotePosition();
-      paint();
-    });
+  // ---------- steady auto-scroll (line by line) ----------
+  function currentRow() {
+    const t = App.tokens[Math.min(App.pos, App.tokens.length - 1)];
+    return t ? App.rows[t.row] : null;
+  }
+  function scheduleAuto() {
+    clearTimeout(App.autoTimer);
+    if (!App.running || App.mode !== 'steady') return;
+    const r = currentRow();
+    const words = r ? Math.max(1, r.end - r.start) : 1;
+    const ms = words * 60000 / Math.max(40, App.settings.wpm);
+    App.autoTimer = setTimeout(autoTick, ms);
+  }
+  function autoTick() {
+    if (!App.running || App.mode !== 'steady') return;
+    const r = currentRow();
+    if (r && r.end < App.tokens.length) { App.pos = r.end; App.anchor = App.pos; paint(); scheduleAuto(); }
+    else { App.pos = App.tokens.length; paint(); stopRun(); $('heardLine').textContent = '🎉 End of script'; }
+  }
+
+  // ---------- run control ----------
+  function startRun() {
+    if (!App.tokens.length) return;
+    if (App.pos >= App.tokens.length) jumpTo(0); // replay
+    App.running = true;
+    setGo();
+    if (App.mode === 'voice') startVoice(); else scheduleAuto();
+  }
+  function pauseRun() {
+    App.running = false;
+    clearTimeout(App.autoTimer);
+    if (App.mode === 'voice') stopVoice();
+    setGo();
+  }
+  function stopRun() {
+    App.running = false;
+    clearTimeout(App.autoTimer);
+    stopVoice();
+    setGo();
+  }
+  function toggleRun() { App.running ? pauseRun() : startRun(); }
+
+  function setGo() {
+    const b = $('goBtn');
+    b.textContent = App.running ? '❚❚ Pause' : (App.pos > 0 && App.pos < App.tokens.length ? '▶ Resume' : '▶ Start');
+  }
+
+  // ---------- flips & sizing ----------
+  function applyTransform() {
+    const sx = App.settings.flipH ? -1 : 1, sy = App.settings.flipV ? -1 : 1;
+    $('prompter').style.transform = `scale(${sx}, ${sy})`;
+    $('flipH').classList.toggle('on', App.settings.flipH);
+    $('flipV').classList.toggle('on', App.settings.flipV);
+  }
+  function applyFont() {
+    document.documentElement.style.setProperty('--fs', App.settings.fontSize + 'px');
+    $('fontSize').value = App.settings.fontSize;
+  }
+  function applyMode() {
+    const voice = App.mode === 'voice';
+    $('modeVoice').classList.toggle('on', voice);
+    $('modeSteady').classList.toggle('on', !voice);
+    $('speedGroup').style.display = voice ? 'none' : '';
+    App.settings.mode = App.mode;
     paint();
   }
-
-  // ---------- dragging ----------
-  function applyNotePosition() {
-    const note = $('note');
-    const s = App.settings;
-    if (s.noteX != null) { note.style.left = s.noteX + 'px'; note.style.top = s.noteY + 'px'; }
-  }
-  (function enableDrag() {
-    const note = $('note');
-    const head = $('noteHead');
-    let sx, sy, ox, oy, dragging = false;
-    head.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.ibtn') || e.target.closest('.settings') || note.classList.contains('pip')) return;
-      dragging = true;
-      sx = e.clientX; sy = e.clientY;
-      const r = note.getBoundingClientRect();
-      ox = r.left; oy = r.top;
-      head.setPointerCapture(e.pointerId);
-    });
-    head.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const x = Math.max(0, ox + e.clientX - sx);
-      const y = Math.max(0, oy + e.clientY - sy);
-      note.style.left = x + 'px';
-      note.style.top = y + 'px';
-      App.settings.noteX = x; App.settings.noteY = y;
-    });
-    head.addEventListener('pointerup', () => { dragging = false; save(); });
-  })();
-
-  // ---------- settings UI ----------
-  function applySettings() {
-    const s = App.settings;
-    const note = $('note');
-    note.dataset.theme = s.theme;
-    note.classList.toggle('font-note', s.font === 'note');
-    document.documentElement.style.setProperty('--fs', s.fs + 'px');
-    document.documentElement.style.setProperty('--note-w', s.width + 'px');
-    document.documentElement.style.setProperty('--note-alpha', s.alpha);
-    if (App.pipWin) {
-      const de = App.pipWin.document.documentElement;
-      de.style.setProperty('--fs', s.fs + 'px');
-      de.style.setProperty('--note-w', s.width + 'px');
-      de.style.setProperty('--note-alpha', s.alpha);
-    }
-    $('fsVal').textContent = s.fs + 'px';
-    $('fsRange').value = s.fs;
-    $('wRange').value = s.width;
-    $('alphaRange').value = s.alpha;
-    $('speedRange').value = s.speed;
-    $('langSel').value = s.lang;
-    [...$('themeSeg').children].forEach(b => b.classList.toggle('on', b.dataset.theme === s.theme));
-    [...$('fontSeg').children].forEach(b => b.classList.toggle('on', b.dataset.font === s.font));
-    [...$('modeSeg').children].forEach(b => b.classList.toggle('on', b.dataset.mode === s.mode));
-    $('speedSec').style.display = s.mode === 'timer' ? '' : 'none';
-    App.mode = s.mode;
-    applyNotePosition();
+  function setMode(m) {
+    if (App.mode === m) return;
+    if (App.running) stopRun();
+    App.mode = m;
+    applyMode();
+    save();
   }
 
-  $('themeSeg').addEventListener('click', e => {
-    const b = e.target.closest('button'); if (!b) return;
-    App.settings.theme = b.dataset.theme; applySettings(); save();
+  // ---------- wire up ----------
+  $('scriptInput').addEventListener('input', (e) => buildScript(e.target.value));
+  $('goBtn').addEventListener('click', toggleRun);
+  $('modeSteady').addEventListener('click', () => setMode('steady'));
+  $('modeVoice').addEventListener('click', () => setMode('voice'));
+  $('flipH').addEventListener('click', () => { App.settings.flipH = !App.settings.flipH; applyTransform(); save(); });
+  $('flipV').addEventListener('click', () => { App.settings.flipV = !App.settings.flipV; applyTransform(); save(); });
+  $('toggleEditor').addEventListener('click', () => $('editor').classList.toggle('collapsed'));
+  $('wpm').addEventListener('input', (e) => {
+    App.settings.wpm = +e.target.value; $('wpmVal').textContent = e.target.value;
+    save(); if (App.running) scheduleAuto();
   });
-  $('fontSeg').addEventListener('click', e => {
-    const b = e.target.closest('button'); if (!b) return;
-    App.settings.font = b.dataset.font; applySettings(); save();
-  });
-  $('modeSeg').addEventListener('click', e => {
-    const b = e.target.closest('button'); if (!b) return;
-    // stop whatever is running before switching
-    if (App.wantListening || App.timerRAF) {
-      if (App.mode === 'timer' && App.timerRAF) toggleTimer();
-      else if (App.wantListening) toggleGo();
-    }
-    App.settings.mode = b.dataset.mode; applySettings(); save();
-  });
-  $('fsRange').addEventListener('input', e => { App.settings.fs = +e.target.value; applySettings(); save(); });
-  $('wRange').addEventListener('input', e => { App.settings.width = +e.target.value; applySettings(); save(); });
-  $('alphaRange').addEventListener('input', e => { App.settings.alpha = +e.target.value; applySettings(); save(); });
-  $('speedRange').addEventListener('input', e => { App.settings.speed = +e.target.value; save(); });
-  $('langSel').addEventListener('change', e => {
-    App.settings.lang = e.target.value; save();
-    if (App.recognition) App.recognition.lang = e.target.value;
+  $('fontSize').addEventListener('input', (e) => { App.settings.fontSize = +e.target.value; applyFont(); save(); });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'TEXTAREA') return;      // don't hijack typing
+    if (e.code === 'Space') { e.preventDefault(); toggleRun(); }
+    else if (e.code === 'Escape') { stopRun(); jumpTo(0); }
+    else if (e.code === 'ArrowUp') { e.preventDefault(); jumpTo(App.pos - 8); }
+    else if (e.code === 'ArrowDown') { e.preventDefault(); jumpTo(App.pos + 8); }
+    else if (e.code === 'ArrowLeft') { jumpTo(App.pos - 1); }
+    else if (e.code === 'ArrowRight') { jumpTo(App.pos + 1); }
   });
 
-  $('gearBtn').addEventListener('click', e => {
-    e.stopPropagation();
-    $('settingsPanel').classList.toggle('open');
-  });
-  document.addEventListener('click', e => {
-    if (!e.target.closest('.settings') && !e.target.closest('#gearBtn')) {
-      $('settingsPanel').classList.remove('open');
-    }
-  });
-
-  // ---------- main buttons ----------
-  $('micBtn').addEventListener('click', toggleGo);
-  $('restartBtn').addEventListener('click', () => { jumpTo(0); $('noteBody').scrollTop = 0; });
-  $('pipBtn').addEventListener('click', popOut);
-  $('editBtn').addEventListener('click', openEditor);
-
-  function openEditor() {
-    $('editorTa').value = App.settings.script;
-    $('editorOv').classList.add('open');
-    $('editorTa').focus();
-  }
-  $('editorCancel').addEventListener('click', () => $('editorOv').classList.remove('open'));
-  $('editorSave').addEventListener('click', () => {
-    buildScript($('editorTa').value);
-    $('editorOv').classList.remove('open');
-  });
-
-  // ---------- setup panel ----------
-  $('sampleBtn').addEventListener('click', () => { $('scriptInput').value = SAMPLE; });
-  $('startBtn').addEventListener('click', () => {
-    const text = $('scriptInput').value.trim() || SAMPLE;
-    buildScript(text);
-    $('note').classList.add('visible');
-  });
-
-  // ---------- keyboard ----------
-  function bindKeys(doc) {
-    doc.addEventListener('keydown', (e) => {
-      const tag = (e.target.tagName || '').toLowerCase();
-      if (tag === 'textarea' || tag === 'input' || tag === 'select') return;
-      if (!$('note').classList.contains('visible') && !App.pipWin) return;
-      if (e.code === 'Space') { e.preventDefault(); toggleGo(); }
-      else if (e.key === 'ArrowRight') { jumpTo(App.pos + 1); }
-      else if (e.key === 'ArrowLeft') { jumpTo(App.pos - 1); }
-      else if (e.key === 'ArrowDown') { jumpTo(App.pos + 8); }
-      else if (e.key === 'ArrowUp') { jumpTo(App.pos - 8); }
-      else if (e.key === 'r' || e.key === 'R') { jumpTo(0); }
-      else if (e.key === 'e' || e.key === 'E') { e.preventDefault(); openEditor(); }
-    });
-  }
-  bindKeys(document);
-
-  // ---------- boot ----------
+  // ---------- init ----------
   load();
-  applySettings();
-  if (App.settings.script) {
-    $('scriptInput').value = App.settings.script;
-    buildScript(App.settings.script);
-    $('note').classList.add('visible');
+  App.mode = App.settings.mode === 'voice' && SR ? 'voice' : 'steady';
+  $('scriptInput').value = App.settings.script || '';
+  $('wpm').value = App.settings.wpm; $('wpmVal').textContent = App.settings.wpm;
+  applyFont(); applyTransform(); applyMode();
+  buildScript(App.settings.script || '');
+  setGo();
+
+  // ---------- self test (append ?selftest to the URL) ----------
+  if (location.search.indexOf('selftest') >= 0) {
+    const out = [];
+    let fails = 0;
+    function expect(name, got, want) { const ok = got === want; if (!ok) fails++; out.push((ok ? 'PASS ' : 'FAIL ') + name + ' pos=' + got + ' want=' + want); }
+    buildScript("Hey everyone, welcome back to the channel!\n\nToday I want to show you something.");
+    App.pos = App.anchor = 0;
+    handleTranscript(["hey"], false); expect("one word", App.pos, 1);
+    handleTranscript(["hey", "everyone", "welcome"], false); expect("interim", App.pos, 3);
+    handleTranscript(["hey", "everyone", "welcome", "back", "to", "the", "channel"], true); expect("sentence", App.pos, 7);
+    handleTranscript(["toady", "i", "want"], true); expect("garbled resync", App.pos, 10);
+    document.body.innerHTML = "<pre style='color:#eef2f8;background:#0b0d12;padding:20px;font:14px monospace'>" +
+      out.join("\n") + "\n\n" + (fails ? fails + " FAILURES" : "ALL PASS") + "</pre>";
   }
 })();
 </script>
