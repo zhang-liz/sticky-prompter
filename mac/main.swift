@@ -81,6 +81,9 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var status = ""
     @Published var clickThrough = false
     @Published var captureHidden = true
+    @Published var autoScroll = false      // steady pace instead of voice tracking
+    @Published var autoPaused = false
+    @Published var wpm: Double = 140       // auto-scroll speed, words per minute
     @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
     @Published var sourceURL: URL?   // external file the script came from; saves write back to it
     @Published var panelIsKey = true // live-mode shortcuts only work while the note is key
@@ -124,6 +127,8 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         clickThrough = d.bool(forKey: "clickThrough")
         captureHidden = d.object(forKey: "captureHidden") as? Bool ?? true
+        autoScroll = d.bool(forKey: "autoScroll")
+        wpm = d.object(forKey: "wpm") as? Double ?? 140
         if let path = d.string(forKey: "libraryDir") {
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
@@ -231,6 +236,8 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(bgB, forKey: "bgB")
         d.set(clickThrough, forKey: "clickThrough")
         d.set(captureHidden, forKey: "captureHidden")
+        d.set(autoScroll, forKey: "autoScroll")
+        d.set(wpm, forKey: "wpm")
         d.set(libraryDir.path, forKey: "libraryDir")
         if let u = sourceURL { d.set(u.path, forKey: "sourceURL") }
         else { d.removeObject(forKey: "sourceURL") }
@@ -714,11 +721,50 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         rebuild()   // reading starts from the first word; click a word to jump
         live = true
-        // going live means "I'm about to read" — start listening right away
-        if autoListen && !listening { startListening() }
+        // going live means "I'm about to read" — start following right away
+        if autoScroll {
+            startAutoScroll()
+        } else if autoListen && !listening {
+            startListening()
+        }
     }
 
     var autoListen = true   // selftest runs headless: no real mic there
+
+    // MARK: auto-scroll (steady pace instead of voice tracking)
+
+    private var autoTimer: Timer?
+
+    /// One steady-pace step. Separated from the timer so the selftest can
+    /// drive it directly.
+    func autoTick() {
+        guard live, autoScroll, !autoPaused else { return }
+        if pos < tokens.count {
+            pos += 1
+            anchor = pos
+        } else {
+            autoTimer?.invalidate()
+            flash("🎉 End of script")
+        }
+    }
+
+    func startAutoScroll() {
+        autoPaused = false
+        rescheduleAutoTimer()
+    }
+
+    func rescheduleAutoTimer() {
+        autoTimer?.invalidate()
+        guard live, autoScroll, !autoPaused else { return }
+        autoTimer = Timer.scheduledTimer(withTimeInterval: 60.0 / max(40, wpm), repeats: true) { [weak self] _ in
+            self?.autoTick()
+        }
+    }
+
+    func stopAutoScroll() {
+        autoTimer?.invalidate()
+        autoTimer = nil
+    }
 
     @discardableResult
     func writeWordFile(_ url: URL) -> Bool {
@@ -736,6 +782,7 @@ final class PrompterModel: NSObject, ObservableObject {
 
     func enterEdit() {
         if listening { stopListening() }
+        stopAutoScroll()
         live = false
     }
 
@@ -1051,6 +1098,12 @@ struct ContentView: View {
                 .frame(width: 68)
                 .help("Background transparency")
             Divider().frame(height: 14).opacity(0.4)
+            ctl(m.autoScroll ? "timer" : "mic",
+                help: m.autoScroll ? "Auto-scroll at a steady pace — click to switch to voice tracking"
+                                   : "Voice tracking — click to switch to steady auto-scroll") {
+                m.autoScroll.toggle()
+                m.persist()
+            }
             HStack(spacing: 1) {
                 ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
                 ctl("folder", help: "Open a file as the script (⌘O) — library lives in File ▸ Scripts (⌘L)") { m.openScriptFile() }
@@ -1088,8 +1141,32 @@ struct ContentView: View {
 
     var footer: some View {
         VStack(alignment: .leading, spacing: 5) {
+            if m.autoScroll {
+                HStack(spacing: 8) {
+                    CtlButton(symbol: m.autoPaused ? "play.fill" : "pause.fill",
+                              help: m.autoPaused ? "Resume auto-scroll" : "Pause auto-scroll",
+                              color: mainColor) {
+                        m.autoPaused.toggle()
+                        m.rescheduleAutoTimer()
+                    }
+                    Slider(value: Binding(get: { m.wpm },
+                                          set: { m.wpm = $0; m.persist(); m.rescheduleAutoTimer() }),
+                           in: 60...260)
+                        .controlSize(.mini)
+                        .frame(width: 110)
+                        .help("Auto-scroll speed")
+                    Text("\(Int(m.wpm)) wpm")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(mainColor.opacity(0.65))
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule(style: .continuous).fill(.thinMaterial))
+                .padding(.leading, 10)
+            }
             let hint = !m.status.isEmpty ? m.status
-                     : !m.listening ? (m.panelIsKey ? "esc = edit"
+                     : !m.listening && !m.autoScroll ? (m.panelIsKey ? "esc = edit"
                                      : m.clickThrough ? "click-through on — control via the menu bar note icon"
                                                       : "click the note, then esc = edit")
                      : ""
@@ -1711,6 +1788,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func toggleMicFromMenu() {
         guard !model.editing else { return }
+        guard !model.autoScroll else {
+            model.flash("Auto-scroll mode — switch to voice tracking on the note")
+            return
+        }
         showNote()   // a hot mic with the note hidden is a dead end
         if !model.live {
             model.goLive()   // tracking needs committed tokens; goLive auto-starts the mic
@@ -1854,6 +1935,20 @@ func runSelfTest() {
     m.listening = true   // simulate a hot mic (no real recognizer headless)
     m.enterEdit()
     expectBool("enterEdit stops the mic", m.listening, false)
+    // auto-scroll mode: steady tick, pause holds, mic never starts
+    m.autoScroll = true
+    m.goLive()
+    expectBool("auto goLive never touches the mic", m.listening, false)
+    let autoStart = m.pos
+    m.autoTick()
+    m.autoTick()
+    expect("auto tick advances", m.pos, autoStart + 2)
+    m.autoPaused = true
+    m.autoTick()
+    expect("paused tick holds", m.pos, autoStart + 2)
+    m.autoPaused = false
+    m.enterEdit()
+    m.autoScroll = false
     // library round-trip in a user-chosen folder (persistEnabled=false keeps
     // the folder switch out of UserDefaults)
     let tmp = FileManager.default.temporaryDirectory
