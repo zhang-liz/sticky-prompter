@@ -869,9 +869,8 @@ struct ContentView: View {
                 .help("Background transparency")
             Divider().frame(height: 14).opacity(0.4)
             HStack(spacing: 1) {
-                ctl("folder", help: "Open a text file as the script (⌘O)") { m.openScriptFile() }
                 ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
-                ctl("books.vertical", help: "Script library — save, load, delete") { m.editing = true }
+                ctl("books.vertical", help: "Scripts — library and files (⌘O opens a file directly)") { m.editing = true }
             }
             Button { m.goLive() } label: {
                 Label("Go Live", systemImage: "play.fill")
