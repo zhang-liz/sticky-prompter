@@ -486,9 +486,34 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
+    /// Modal "name your script" prompt. Nil when cancelled or left blank.
+    private func promptScriptName() -> String? {
+        guard alertsEnabled else { return nil }
+        let a = NSAlert()
+        a.messageText = "Name your script"
+        a.informativeText = "It's saved in the library as a .txt file."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 230, height: 24))
+        field.placeholderString = "Script name"
+        a.accessoryView = field
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        guard a.runModal() == .alertFirstButtonReturn else { return nil }
+        let n = field.stringValue.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? nil : n
+    }
+
+    private func confirmReplaceLibraryScript(_ n: String) -> Bool {
+        let a = NSAlert()
+        a.messageText = "Replace the script “\(n)”?"
+        a.informativeText = "A script with this name is already in the library."
+        a.addButton(withTitle: "Replace")
+        a.addButton(withTitle: "Cancel")
+        return alertsEnabled && a.runModal() == .alertFirstButtonReturn
+    }
+
     /// One-click / ⌘S save of what's on the note. Scripts opened from a file
-    /// save back to that file; otherwise the library. No name yet → the
-    /// library sheet opens so the user can give it one.
+    /// save back to that file; otherwise the library. No name yet → ask for one.
     func saveCurrentScript() {
         if let u = sourceURL { saveToSource(u); return }
         let n = scriptName.trimmingCharacters(in: .whitespaces)
@@ -497,9 +522,18 @@ final class PrompterModel: NSObject, ObservableObject {
                 flash("Nothing to save yet")
                 return
             }
-            if live { enterEdit() }   // the sheet shouldn't stack on the live prompter
-            flash("Name the script to save it")
-            editing = true
+            if live { enterEdit() }   // stop the mic before a modal prompt
+            guard let newName = promptScriptName() else { return }
+            if savedNames.contains(where: { $0.caseInsensitiveCompare(newName) == .orderedSame }),
+               !confirmReplaceLibraryScript(newName) { return }
+            if saveScript(newName, text: script) {
+                scriptName = newName
+                libraryBaseline = script
+                persist()
+                flash("Saved “\(newName)”")
+            } else {
+                flash("⚠️ Couldn't save “\(newName)” — check the library folder")
+            }
             return
         }
         // same never-clobber rule as source files: a library .txt edited
@@ -678,7 +712,7 @@ final class PrompterModel: NSObject, ObservableObject {
                 }
             }
         }
-        rebuild(resetPos: false)
+        rebuild()   // reading starts from the first word; click a word to jump
         live = true
         // going live means "I'm about to read" — start listening right away
         if autoListen && !listening { startListening() }
@@ -925,13 +959,20 @@ struct ContentView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
                     ForEach(m.rows) { r in
-                        Text(attributed(r))
-                            .font(.system(size: r.heading ? m.fontSize * 1.2 : m.fontSize,
-                                          weight: r.heading ? .bold : .medium, design: .rounded))
-                            .lineSpacing(m.fontSize * 0.35)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
-                            .id(r.id)
+                        WrapWords(lineSpacing: m.fontSize * 0.35) {
+                            ForEach(Array(r.range), id: \.self) { i in
+                                Text(m.tokens[i].text + " ")
+                                    .font(.system(size: r.heading ? m.fontSize * 1.2 : m.fontSize,
+                                                  weight: r.heading ? .bold : .medium, design: .rounded))
+                                    .foregroundColor(i < m.pos ? mainColor.opacity(0.32)
+                                                     : i == m.pos ? hiFG : mainColor)
+                                    .background(i == m.pos ? hiBG : .clear)
+                                    .onTapGesture(count: 2) { m.enterEdit() }
+                                    .onTapGesture { m.jump(to: i) }   // click a word = read from here
+                            }
+                        }
+                        .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
+                        .id(r.id)
                     }
                     Color.clear.frame(height: 340)
                 }
@@ -973,23 +1014,6 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .onExitCommand { m.goLive() }   // Esc commits and goes live
         }
-    }
-
-    func attributed(_ r: Row) -> AttributedString {
-        var out = AttributedString()
-        for i in r.range {
-            var run = AttributedString(m.tokens[i].text + " ")
-            if i < m.pos {
-                run.foregroundColor = mainColor.opacity(0.32)
-            } else if i == m.pos {
-                run.foregroundColor = hiFG
-                run.backgroundColor = hiBG
-            } else {
-                run.foregroundColor = mainColor
-            }
-            out += run
-        }
-        return out
     }
 
     var bgBinding: Binding<Color> {
@@ -1091,6 +1115,36 @@ struct ContentView: View {
             .padding(.horizontal, 10)
         }
         .padding(.bottom, 8)
+    }
+}
+
+/// Wrapping word layout: like flowing text, but every word is its own view
+/// so a click can target it.
+struct WrapWords: Layout {
+    var lineSpacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > 0, x + s.width > maxW { x = 0; y += lineH + lineSpacing; lineH = 0 }
+            x += s.width
+            lineH = max(lineH, s.height)
+        }
+        return CGSize(width: maxW.isFinite ? maxW : x, height: y + lineH)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > 0, x + s.width > bounds.width { x = 0; y += lineH + lineSpacing; lineH = 0 }
+            v.place(at: CGPoint(x: bounds.minX + x, y: bounds.minY + y),
+                    anchor: .topLeading, proposal: .unspecified)
+            x += s.width
+            lineH = max(lineH, s.height)
+        }
     }
 }
 
@@ -1782,11 +1836,11 @@ func runSelfTest() {
     m.script = PrompterModel.sample
     m.rebuild()
     expect("plain rebuild resets", m.pos, 0)
-    // goLive commits + keeps clamped position; enterEdit stops listening
+    // goLive commits and always starts from the first word
     m.scriptName = ""   // avoid writing a library file from the selftest
     m.jump(to: 5)
     m.goLive()
-    expect("goLive keeps pos", m.pos, 5)
+    expect("goLive starts from the top", m.pos, 0)
     func expectBool(_ name: String, _ got: Bool, _ want: Bool) {
         let ok = got == want
         if !ok { fails += 1 }
@@ -1817,21 +1871,20 @@ func runSelfTest() {
     expectBool("quick save writes named script", m.loadScript("Quick") == "quick save body", true)
     m.editing = false
     m.scriptName = ""
+    // unnamed save asks for a name (headless: prompt counts as Cancel — no write, no sheet)
+    let namesBefore = m.savedNames
     m.saveCurrentScript()
-    expectBool("quick save without name opens library", m.editing, true)
-    m.editing = false
-    // an empty unnamed note has nothing to name — no sheet
+    expectBool("unnamed save prompts, cancel writes nothing", m.savedNames == namesBefore && m.editing == false, true)
+    // an empty unnamed note has nothing to name
     let body = m.script
     m.script = "   "
     m.saveCurrentScript()
-    expectBool("empty unnamed save skips the sheet", m.editing, false)
-    // unnamed save while live drops back to edit before the sheet opens
+    expectBool("empty unnamed save does nothing", m.editing == false && m.savedNames == namesBefore, true)
+    // unnamed save while live drops back to edit before the name prompt
     m.script = body
     m.goLive()
     m.saveCurrentScript()
     expectBool("unnamed live save leaves live mode", m.live, false)
-    expectBool("unnamed live save opens library", m.editing, true)
-    m.editing = false
     // script opened from an external file saves back in place
     let ext = tmp.appendingPathComponent("external.txt")
     try? "original".write(to: ext, atomically: true, encoding: .utf8)
