@@ -85,6 +85,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var sourceURL: URL?   // external file the script came from; saves write back to it
     @Published var panelIsKey = true // live-mode shortcuts only work while the note is key
     var sourceBaseline: String?      // file content at last load/save — detects external edits
+    var libraryBaseline: String?     // library file content at last load/save — same check
     var alertsEnabled = true         // selftest runs headless; treat alerts as "cancel"
 
     var tokens: [Token] = []
@@ -133,23 +134,77 @@ final class PrompterModel: NSObject, ObservableObject {
             if FileManager.default.fileExists(atPath: path) {
                 let url = URL(fileURLWithPath: path)
                 sourceURL = url
-                // the file is the source of truth: adopt whatever is on disk
-                // so a copy staled in defaults can never clobber it
-                if let disk = PrompterModel.readScriptFile(url) {
-                    script = disk
-                    sourceBaseline = disk
+                // (can't read self.script before super.init — re-read defaults)
+                let r = Self.resolveRestoredScript(persisted: d.string(forKey: "script") ?? "",
+                                                   baseline: d.string(forKey: "sourceBaseline"),
+                                                   disk: Self.readScriptFile(url))
+                script = r.script
+                sourceBaseline = r.baseline
+                if r.keptEdits {
+                    status = "Note has edits not saved to “\(url.lastPathComponent)” — ⌘S to save"
                 }
             } else {
                 status = "⚠️ Original file moved or deleted — script kept, saves go to the library"
             }
         }
         super.init()
-        rebuild()
         refreshSavedNames()
+        if sourceURL == nil, d.string(forKey: "sourceURL") == nil,
+           !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
+            // same relaunch policy as source files: a .txt edited while the
+            // app was quit is adopted when the note is clean, and typed note
+            // edits are kept (and flagged) so goLive/⌘S prompt instead of
+            // clobbering — but only for notes that owned their library file
+            // at last quit (RTF imports and orphaned source files carry a
+            // name without a baseline; a colliding .txt is not ours to adopt)
+            let r = Self.resolveRestoredLibraryScript(persisted: script,
+                                                      hadBaseline: d.object(forKey: "libraryBaseline") != nil,
+                                                      baseline: d.string(forKey: "libraryBaseline"),
+                                                      disk: loadScript(scriptName))
+            script = r.script
+            libraryBaseline = r.baseline
+            if r.warnDiffers {
+                status = "Note differs from library script “\(scriptName)” — ⌘S to review"
+            } else if r.keptEdits {
+                status = "Note has edits not saved to “\(scriptName)” — ⌘S to save"
+            }
+        }
+        rebuild()
         // don't lose direct edits on quit — persist shortly after typing stops
         persistSub = $script
             .debounce(for: .seconds(0.5), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.persist() }
+    }
+
+    /// Relaunch policy for a script opened from a file. The file is the
+    /// source of truth only while note and file agree: a defaults copy
+    /// staled behind the file adopts the disk version, but edits typed on
+    /// the note (persisted != baseline) are never silently discarded.
+    static func resolveRestoredScript(persisted: String, baseline: String?, disk: String?)
+        -> (script: String, baseline: String?, keptEdits: Bool) {
+        if let disk = disk, disk == persisted {
+            return (disk, disk, false)   // note and file agree — no edits to warn about
+        }
+        if let base = baseline, persisted != base {
+            return (persisted, base, true)   // note is ahead of the file
+        }
+        if let disk = disk { return (disk, disk, false) }
+        return (persisted, baseline, false)
+    }
+
+    /// Relaunch policy for a library-named note. A persisted baseline means
+    /// the note owned the file at last quit, so the source-file policy above
+    /// applies. No baseline (RTF import, orphaned source file) means a
+    /// same-named library file was never ours: keep the note untouched and
+    /// just flag the mismatch so goLive/⌘S prompt instead of clobbering.
+    static func resolveRestoredLibraryScript(persisted: String, hadBaseline: Bool,
+                                             baseline: String?, disk: String?)
+        -> (script: String, baseline: String?, warnDiffers: Bool, keptEdits: Bool) {
+        guard hadBaseline else {
+            return (persisted, nil, disk != nil && disk != persisted, false)
+        }
+        let r = resolveRestoredScript(persisted: persisted, baseline: baseline, disk: disk)
+        return (r.script, r.baseline, false, r.keptEdits)
     }
 
     static let sample = """
@@ -160,7 +215,9 @@ final class PrompterModel: NSObject, ObservableObject {
     Before we dive in, a quick note. Everything I show today is free and open source, and the link to the full code is in the description below.
     """
 
-    var persistEnabled = true   // selftest must not clobber real settings
+    // selftest must not clobber real settings — decided before init() runs,
+    // so the rebuild()/persist() during init is already a no-op under --selftest
+    var persistEnabled = !CommandLine.arguments.contains("--selftest")
 
     func persist() {
         guard persistEnabled else { return }
@@ -177,6 +234,10 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(libraryDir.path, forKey: "libraryDir")
         if let u = sourceURL { d.set(u.path, forKey: "sourceURL") }
         else { d.removeObject(forKey: "sourceURL") }
+        if let b = sourceBaseline { d.set(b, forKey: "sourceBaseline") }
+        else { d.removeObject(forKey: "sourceBaseline") }
+        if let b = libraryBaseline { d.set(b, forKey: "libraryBaseline") }
+        else { d.removeObject(forKey: "libraryBaseline") }
     }
 
     // MARK: script library (plain .txt files, user-accessible)
@@ -267,7 +328,7 @@ final class PrompterModel: NSObject, ObservableObject {
             a.informativeText = "The note has changes that aren't saved anywhere yet."
             a.addButton(withTitle: "Replace")
             a.addButton(withTitle: "Cancel")
-            guard !alertsEnabled || a.runModal() == .alertFirstButtonReturn else { return }
+            guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else { return }
         }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -287,11 +348,12 @@ final class PrompterModel: NSObject, ObservableObject {
         let importOnly = Self.isRichTextFile(url)
         sourceURL = importOnly ? nil : url
         sourceBaseline = importOnly ? nil : text
+        libraryBaseline = nil      // an existing library script of this name is not ours yet
         wordSaveApproved = false   // re-ask before overwriting a Word file
         rebuild()
         persist()
         editing = false
-        live = false   // land in the edit interface with the file loaded
+        enterEdit()    // land in the edit interface — stops the mic if we were live
         flash(importOnly ? "Opened “\(url.lastPathComponent)” — saves go to the library"
                          : "Opened “\(url.lastPathComponent)”")
     }
@@ -392,8 +454,12 @@ final class PrompterModel: NSObject, ObservableObject {
                 guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else { return }
                 wordSaveApproved = true
             }
+            // the Word exporter gains a trailing newline on read-back —
+            // normalize the note first so note, baseline and disk agree
+            if !script.hasSuffix("\n") { script += "\n" }
             if writeWordFile(url) {
-                sourceBaseline = script
+                sourceBaseline = Self.readScriptFile(url) ?? script
+                persist()   // keep the relaunch baseline in step with the file
                 flash("Saved “\(url.lastPathComponent)”")
             } else {
                 flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
@@ -403,6 +469,7 @@ final class PrompterModel: NSObject, ObservableObject {
         do {
             try script.write(to: url, atomically: true, encoding: .utf8)
             sourceBaseline = script
+            persist()   // keep the relaunch baseline in step with the file
             flash("Saved “\(url.lastPathComponent)”")
         } catch {
             flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
@@ -416,12 +483,34 @@ final class PrompterModel: NSObject, ObservableObject {
         if let u = sourceURL { saveToSource(u); return }
         let n = scriptName.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty else {
+            guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                flash("Nothing to save yet")
+                return
+            }
+            if live { enterEdit() }   // the sheet shouldn't stack on the live prompter
             flash("Name the script to save it")
             editing = true
             return
         }
-        flash(saveScript(n, text: script) ? "Saved “\(n)”"
-                                          : "⚠️ Couldn't save “\(n)” — check the library folder")
+        // same never-clobber rule as source files: a library .txt edited
+        // outside the app isn't silently overwritten
+        if let disk = loadScript(n), disk != script, disk != libraryBaseline {
+            let a = NSAlert()
+            a.messageText = "“\(n)” changed outside Sticky Prompter"
+            a.informativeText = "Saving will overwrite those outside changes with the note's version."
+            a.addButton(withTitle: "Overwrite")
+            a.addButton(withTitle: "Cancel")
+            guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else {
+                flash("⚠️ Not saved — “\(n)” changed on disk")
+                return
+            }
+        }
+        if saveScript(n, text: script) {
+            libraryBaseline = script
+            flash("Saved “\(n)”")
+        } else {
+            flash("⚠️ Couldn't save “\(n)” — check the library folder")
+        }
     }
 
     private var statusClear: Timer?
@@ -437,11 +526,22 @@ final class PrompterModel: NSObject, ObservableObject {
         try? String(contentsOf: savedURLs[name] ?? scriptURL(name), encoding: .utf8)
     }
 
-    func deleteScript(_ name: String) {
+    @discardableResult
+    func deleteScript(_ name: String) -> Bool {
         // move to Trash rather than deleting outright
-        try? FileManager.default.trashItem(at: savedURLs[name] ?? scriptURL(name), resultingItemURL: nil)
-        refreshSavedNames()
+        do {
+            try FileManager.default.trashItem(at: savedURLs[name] ?? scriptURL(name), resultingItemURL: nil)
+            refreshSavedNames()
+            return true
+        } catch {
+            refreshSavedNames()
+            return false
+        }
     }
+
+    /// The Scripts sheet may skip the Replace prompt only for a draft the note
+    /// owns in the library — not one merely named after an opened/imported file.
+    var ownsLibraryScript: Bool { sourceURL == nil && libraryBaseline != nil }
 
     /// Markdown scripts get headings and syntax stripping in live mode
     var isMarkdown: Bool {
@@ -517,14 +617,26 @@ final class PrompterModel: NSObject, ObservableObject {
             if sourceChangedExternally(u) {
                 flash("⚠️ “\(u.lastPathComponent)” changed on disk — ⌘S to review")
             } else if Self.isWordFile(u) {
-                if wordSaveApproved, writeWordFile(u) { sourceBaseline = script }
+                if wordSaveApproved, script != sourceBaseline {
+                    // same trailing-newline normalization as saveToSource
+                    if !script.hasSuffix("\n") { script += "\n" }
+                    if writeWordFile(u) { sourceBaseline = Self.readScriptFile(u) ?? script }
+                }
             } else if script != sourceBaseline {
                 if (try? script.write(to: u, atomically: true, encoding: .utf8)) != nil {
                     sourceBaseline = script
                 }
             }
-        } else if !scriptName.trimmingCharacters(in: .whitespaces).isEmpty {
-            saveScript(scriptName, text: script)   // keep library file in sync
+        } else {
+            let n = scriptName.trimmingCharacters(in: .whitespaces)
+            if !n.isEmpty {
+                // keep the library file in sync — but never over external edits
+                if let disk = loadScript(n), disk != script, disk != libraryBaseline {
+                    flash("⚠️ “\(n)” changed on disk — ⌘S to review")
+                } else if saveScript(n, text: script) {
+                    libraryBaseline = script
+                }
+            }
         }
         rebuild(resetPos: false)
         live = true
@@ -534,9 +646,12 @@ final class PrompterModel: NSObject, ObservableObject {
     func writeWordFile(_ url: URL) -> Bool {
         let attr = NSAttributedString(string: script,
                                       attributes: [.font: NSFont.systemFont(ofSize: 12)])
+        // match the extension: docx bytes in a .doc file read as corrupt elsewhere
+        let type: NSAttributedString.DocumentType =
+            url.pathExtension.lowercased() == "doc" ? .docFormat : .officeOpenXML
         guard let data = try? attr.data(
                 from: NSRange(location: 0, length: attr.length),
-                documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML]),
+                documentAttributes: [.documentType: type]),
               (try? data.write(to: url, options: .atomic)) != nil else { return false }
         return true
     }
@@ -907,7 +1022,8 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 5) {
             let hint = !m.status.isEmpty ? m.status
                      : !m.listening ? (m.panelIsKey ? "space = mic · esc = edit"
-                                                    : "click the note first, then space = mic")
+                                     : m.clickThrough ? "click-through on — mic via the menu bar note icon"
+                                                      : "click the note first, then space = mic")
                      : ""
             if !hint.isEmpty {
                 Text(hint)
@@ -1038,8 +1154,18 @@ struct EditorView: View {
                                     guard confirmDiscard() else { return }
                                     if let t = m.loadScript(n) { draft = t; name = n; snapshot = t; loadedName = n }
                                 } onDelete: {
-                                    m.deleteScript(n)
+                                    guard m.deleteScript(n) else {
+                                        m.flash("⚠️ Couldn't move “\(n)” to Trash")
+                                        return
+                                    }
                                     if name == n { name = "" }
+                                    if n == m.scriptName {
+                                        // note's own file just got trashed — detach it
+                                        // so goLive/⌘S don't quietly recreate the file
+                                        m.scriptName = ""
+                                        m.libraryBaseline = nil
+                                        m.persist()
+                                    }
                                 }
                             }
                         }
@@ -1118,12 +1244,14 @@ struct EditorView: View {
                         } label: {
                             Label("Save to Library", systemImage: "square.and.arrow.down").fixedSize()
                         }
+                        .keyboardShortcut("s", modifiers: .command)   // ⌘S saves here too
                         .disabled(!nameOK)
                         Spacer()
                         Button("Cancel") {
                             guard confirmDiscard() else { return }
                             m.editing = false
                         }
+                        .keyboardShortcut(.cancelAction)   // Esc dismisses the sheet
                         Button("Use Script") {
                             guard confirmDetachSource(), nameOK ? confirmOverwrite() : true else { return }
                             if nameOK { m.saveScript(name, text: draft) }
@@ -1131,6 +1259,7 @@ struct EditorView: View {
                             m.script = draft
                             m.sourceURL = nil   // library owns the script again
                             m.sourceBaseline = nil
+                            m.libraryBaseline = nameOK ? draft : nil
                             m.rebuild()
                             m.persist()
                             m.editing = false
@@ -1146,7 +1275,9 @@ struct EditorView: View {
         .onAppear {
             m.refreshSavedNames()   // pick up files added/removed in Finder
             draft = m.script; name = m.scriptName; snapshot = m.script
-            loadedName = m.scriptName
+            // only a library-owned draft may skip the overwrite prompt —
+            // file opens/imports set scriptName without owning that library entry
+            loadedName = m.ownsLibraryScript ? m.scriptName : ""
         }
     }
 }
@@ -1213,7 +1344,7 @@ final class PrompterPanel: NSPanel {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let model = PrompterModel()
     var panel: NSPanel!
     var statusItem: NSStatusItem!
@@ -1260,6 +1391,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.$live
             .receive(on: DispatchQueue.main)
             .sink { [weak self] live in self?.applyMode(live: live) }
+            .store(in: &subs)
+        // the status menu is the only control surface with click-through on —
+        // its mic item must show whether the mic is actually listening
+        model.$listening
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] on in
+                self?.statusItem?.menu?.item(withTag: 3)?.state = on ? .on : .off
+            }
             .store(in: &subs)
         applyMode(live: model.live)
         // live-mode shortcuts only reach us while the note is the key window —
@@ -1311,8 +1450,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
     }
 
-    @objc func openFromMenu() { model.openScriptFile() }
-    @objc func saveFromMenu() { model.saveCurrentScript() }
+    // the Scripts sheet owns open/save while it's up — ⌘O/⌘S from the main
+    // menu would bypass its draft and its discard confirmations
+    @objc func openFromMenu() {
+        guard !model.editing else { return }
+        model.openScriptFile()
+    }
+    @objc func saveFromMenu() {
+        guard !model.editing else { return }
+        model.saveCurrentScript()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(openFromMenu) || menuItem.action == #selector(saveFromMenu) {
+            return !model.editing
+        }
+        return true
+    }
 
     // NEVER true: AppKit's last-window check ignores NSPanels, so it would
     // terminate the app mid-use whenever a helper window (sheet, IME palette)
@@ -1327,27 +1481,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Sticky Prompter")
         let menu = NSMenu()
-        let mode = NSMenuItem(title: "Edit script", action: #selector(toggleMode), keyEquivalent: "e")
+        // no keyEquivalents here: a closed status menu never dispatches them,
+        // so the hints would advertise shortcuts that don't work (or collide
+        // with real ones — the live-mode keys are unmodified space/r/e)
+        let mode = NSMenuItem(title: "Edit script", action: #selector(toggleMode), keyEquivalent: "")
         mode.target = self
         mode.tag = 2
         menu.addItem(mode)
-        let mic = NSMenuItem(title: "Voice tracking on/off", action: #selector(toggleMicFromMenu), keyEquivalent: " ")
+        let mic = NSMenuItem(title: "Voice tracking", action: #selector(toggleMicFromMenu), keyEquivalent: "")
         mic.target = self
+        mic.tag = 3
+        mic.state = model.listening ? .on : .off
         menu.addItem(mic)
-        let restart = NSMenuItem(title: "Restart from top", action: #selector(restartFromMenu), keyEquivalent: "r")
+        let restart = NSMenuItem(title: "Restart from top", action: #selector(restartFromMenu), keyEquivalent: "")
         restart.target = self
         menu.addItem(restart)
         menu.addItem(.separator())
-        let ct = NSMenuItem(title: "Click-through (ignore mouse)", action: #selector(toggleClickThrough), keyEquivalent: "t")
+        let ct = NSMenuItem(title: "Click-through (ignore mouse)", action: #selector(toggleClickThrough), keyEquivalent: "")
         ct.target = self
         ct.tag = 1
         ct.state = model.clickThrough ? .on : .off
         menu.addItem(ct)
-        let hide = NSMenuItem(title: "Hide from screen sharing & recording", action: #selector(toggleCaptureHidden), keyEquivalent: "h")
+        let hide = NSMenuItem(title: "Hide from screen sharing & recording", action: #selector(toggleCaptureHidden), keyEquivalent: "")
         hide.target = self
         hide.state = model.captureHidden ? .on : .off
         menu.addItem(hide)
-        let show = NSMenuItem(title: "Show note", action: #selector(showNote), keyEquivalent: "s")
+        let show = NSMenuItem(title: "Show note", action: #selector(showNote), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
         menu.addItem(.separator())
@@ -1387,11 +1546,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleMode() {
         if model.live { model.enterEdit() } else { model.goLive() }
-        panel.makeKeyAndOrderFront(nil)
+        showNote()   // deminiaturize too — live mode in the Dock is useless
     }
 
     @objc func toggleMicFromMenu() {
-        if !model.live { model.goLive() }   // tracking needs committed tokens
+        showNote()   // a hot mic with the note hidden is a dead end
+        if !model.live {
+            model.goLive()   // tracking needs committed tokens
+            guard model.live else { return }   // empty script: goLive already said why
+        }
         model.toggleMic()
     }
 
@@ -1464,6 +1627,7 @@ func runSelfTest() {
     m.persistEnabled = false    // never touch the user's saved script/settings
     m.sourceURL = nil           // ignore any source file restored from defaults
     m.sourceBaseline = nil
+    m.libraryBaseline = nil
     m.alertsEnabled = false     // headless: every confirmation counts as Cancel
     m.script = PrompterModel.sample
     m.rebuild()
@@ -1520,6 +1684,11 @@ func runSelfTest() {
     expectBool("goLive sets live", m.live, true)
     m.enterEdit()
     expectBool("enterEdit clears live", m.live, false)
+    // the mic belongs to live mode only — every exit must shut it off
+    m.goLive()
+    m.listening = true   // simulate a hot mic (no real recognizer headless)
+    m.enterEdit()
+    expectBool("enterEdit stops the mic", m.listening, false)
     // library round-trip in a user-chosen folder (persistEnabled=false keeps
     // the folder switch out of UserDefaults)
     let tmp = FileManager.default.temporaryDirectory
@@ -1539,6 +1708,18 @@ func runSelfTest() {
     m.scriptName = ""
     m.saveCurrentScript()
     expectBool("quick save without name opens library", m.editing, true)
+    m.editing = false
+    // an empty unnamed note has nothing to name — no sheet
+    let body = m.script
+    m.script = "   "
+    m.saveCurrentScript()
+    expectBool("empty unnamed save skips the sheet", m.editing, false)
+    // unnamed save while live drops back to edit before the sheet opens
+    m.script = body
+    m.goLive()
+    m.saveCurrentScript()
+    expectBool("unnamed live save leaves live mode", m.live, false)
+    expectBool("unnamed live save opens library", m.editing, true)
     m.editing = false
     // script opened from an external file saves back in place
     let ext = tmp.appendingPathComponent("external.txt")
@@ -1576,7 +1757,40 @@ func runSelfTest() {
     m.script = "rewritten body"
     m.saveCurrentScript()
     expectBool("docx write-back", PrompterModel.readScriptFile(docx)?.contains("rewritten body") == true, true)
+    // goLive doesn't rewrite an approved Word doc when nothing changed (mtime churn)
+    m.script = PrompterModel.readScriptFile(docx) ?? "rewritten body"
+    m.sourceBaseline = m.script
+    let mtBefore = (try? FileManager.default.attributesOfItem(atPath: docx.path)[.modificationDate]) as? Date
+    m.goLive()
+    let mtAfter = (try? FileManager.default.attributesOfItem(atPath: docx.path)[.modificationDate]) as? Date
+    expectBool("goLive skips unchanged Word doc", mtBefore != nil && mtBefore == mtAfter, true)
+    // Word save must not poison its own baseline: a note without a trailing
+    // newline reads back from the exporter with one — after ⌘S note, baseline
+    // and disk agree, so a second ⌘S takes the quiet no-alert path
+    m.script = "no trailing newline"
+    m.saveCurrentScript()
+    expectBool("docx save aligns note, baseline and disk",
+               PrompterModel.readScriptFile(docx) == m.script && m.script == m.sourceBaseline, true)
+    m.saveCurrentScript()   // a poisoned baseline would alert (headless = cancel) and skip the write
+    expectBool("second docx save stays clean",
+               PrompterModel.readScriptFile(docx) == m.script && m.script == m.sourceBaseline, true)
+    m.enterEdit()
     m.sourceURL = nil
+    // legacy .doc write-back stays real .doc bytes (not mislabeled docx)
+    let doc = tmp.appendingPathComponent("w.doc")
+    let conv2 = Process()
+    conv2.executableURL = URL(fileURLWithPath: "/usr/bin/textutil")
+    conv2.arguments = ["-convert", "doc", txtSrc.path, "-output", doc.path]
+    try? conv2.run(); conv2.waitUntilExit()
+    m.sourceURL = doc
+    m.sourceBaseline = PrompterModel.readScriptFile(doc)
+    m.script = "doc rewritten body"
+    m.saveCurrentScript()
+    expectBool("doc write-back", PrompterModel.readScriptFile(doc)?.contains("doc rewritten body") == true, true)
+    let docBytes = (try? Data(contentsOf: doc)) ?? Data()
+    expectBool("doc write-back is Word 97 format", docBytes.starts(with: [0xD0, 0xCF, 0x11, 0xE0]), true)
+    m.sourceURL = nil
+    m.sourceBaseline = nil
     // markdown: headings styled, syntax stripped, speech still matches
     let mdFile = tmp.appendingPathComponent("t.md")
     try? "x".write(to: mdFile, atomically: true, encoding: .utf8)
@@ -1607,10 +1821,69 @@ func runSelfTest() {
     expectBool("save keeps external edits without consent", (try? String(contentsOf: shared, encoding: .utf8)) == "theirs", true)
     m.sourceURL = nil
     m.sourceBaseline = nil
+    // library scripts get the same never-clobber rule
+    m.scriptName = "Lib"
+    m.script = "lib v1"
+    m.saveCurrentScript()
+    expectBool("library save sets baseline", m.loadScript("Lib") == "lib v1", true)
+    try? "lib theirs".write(to: tmp.appendingPathComponent("Lib.txt"), atomically: true, encoding: .utf8)
+    m.script = "lib mine"
+    m.goLive()
+    expectBool("goLive keeps external library edits", m.loadScript("Lib") == "lib theirs", true)
+    m.enterEdit()
+    m.saveCurrentScript()   // alert suppressed → cancel
+    expectBool("library save keeps external edits without consent", m.loadScript("Lib") == "lib theirs", true)
+    m.scriptName = ""
+    m.libraryBaseline = nil
+    // relaunch policy: typed note edits survive; disk still wins when in sync
+    let rKeep = PrompterModel.resolveRestoredScript(persisted: "typed edits", baseline: "old", disk: "old")
+    expectBool("relaunch keeps unsaved note edits", rKeep.script == "typed edits" && rKeep.keptEdits, true)
+    let rDisk = PrompterModel.resolveRestoredScript(persisted: "same", baseline: "same", disk: "newer on disk")
+    expectBool("relaunch adopts file changed on disk", rDisk.script == "newer on disk" && !rDisk.keptEdits, true)
+    expectBool("relaunch without baseline adopts disk",
+               PrompterModel.resolveRestoredScript(persisted: "stale", baseline: nil, disk: "disk").script == "disk", true)
+    // note and file already agree → no false "unsaved edits" warning
+    let rSame = PrompterModel.resolveRestoredScript(persisted: "same", baseline: "old", disk: "same")
+    expectBool("relaunch matching disk clears stale baseline",
+               rSame.baseline == "same" && !rSame.keptEdits, true)
+    // library scripts use the same policy: a clean note adopts a .txt
+    // edited in another app while Sticky Prompter was quit
+    let rLib = PrompterModel.resolveRestoredScript(persisted: "old", baseline: "old", disk: "external v2")
+    expectBool("library relaunch adopts external edits",
+               rLib.script == "external v2" && rLib.baseline == "external v2" && !rLib.keptEdits, true)
+    // a note that never owned a library file (RTF import / orphaned source)
+    // must not adopt a colliding library .txt at relaunch — flag, don't clobber
+    let rImport = PrompterModel.resolveRestoredLibraryScript(
+        persisted: "rtf import edits", hadBaseline: false, baseline: nil, disk: "old lib")
+    expectBool("relaunch keeps import over colliding library file",
+               rImport.script == "rtf import edits" && rImport.baseline == nil && rImport.warnDiffers, true)
+    let rOwned = PrompterModel.resolveRestoredLibraryScript(
+        persisted: "old", hadBaseline: true, baseline: "old", disk: "external v2")
+    expectBool("owned library relaunch still adopts external edits",
+               rOwned.script == "external v2" && !rOwned.warnDiffers, true)
+    // headless: the replace-script confirmation counts as cancel
+    m.script = "unsaved stuff"
+    m.openScriptFile()
+    expectBool("headless open cancels instead of replacing", m.script == "unsaved stuff", true)
     // library names with sanitized characters map to the right file
     try? "colon body".write(to: tmp.appendingPathComponent("a:b.txt"), atomically: true, encoding: .utf8)
     m.refreshSavedNames()
     expectBool("colon name loads right file", m.loadScript("a:b") == "colon body", true)
+    // deleting a script reports success — a failed Trash must not detach the note
+    expectBool("delete missing script returns false", m.deleteScript("no-such-script"), false)
+    expectBool("delete existing script returns true", m.deleteScript("Quick"), true)
+    expectBool("deleted script leaves the list", m.savedNames.contains("Quick"), false)
+    // the Scripts sheet pre-trusts a name only when the note owns the library
+    // script — file opens/imports must go through the Replace prompt
+    m.scriptName = "Talk"
+    m.libraryBaseline = "talk body"
+    expectBool("library-owned note owns its script", m.ownsLibraryScript, true)
+    m.sourceURL = shared          // opened file with a colliding name
+    m.libraryBaseline = nil
+    expectBool("opened file doesn't own library script", m.ownsLibraryScript, false)
+    m.sourceURL = nil             // RTF import: no source, no baseline
+    expectBool("import doesn't own library script", m.ownsLibraryScript, false)
+    m.scriptName = ""
     // failed saves report failure
     let lockedDir = tmp.appendingPathComponent("locked", isDirectory: true)
     try? FileManager.default.createDirectory(at: lockedDir, withIntermediateDirectories: true)
