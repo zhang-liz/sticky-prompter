@@ -263,12 +263,22 @@ final class PrompterModel: NSObject, ObservableObject {
     // (":" or "/") still load and delete the right file
     private var savedURLs: [String: URL] = [:]
 
+    /// The default filesystem is case-insensitive — "talk" and "Talk.txt" are
+    /// the same file, so lookups must target the existing on-disk name.
+    private func savedURL(_ name: String) -> URL? {
+        savedURLs[name] ?? savedURLs.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
     func refreshSavedNames() {
+        // .TXT counts too; folders named *.txt don't (a first-key collision on
+        // a case-sensitive volume keeps one entry rather than crashing)
         let urls = (try? FileManager.default.contentsOfDirectory(
-            at: libraryDir, includingPropertiesForKeys: nil)) ?? []
-        savedURLs = Dictionary(uniqueKeysWithValues: urls
-            .filter { $0.pathExtension == "txt" }
-            .map { ($0.deletingPathExtension().lastPathComponent, $0) })
+            at: libraryDir, includingPropertiesForKeys: [.isRegularFileKey])) ?? []
+        savedURLs = Dictionary(urls
+            .filter { $0.pathExtension.lowercased() == "txt"
+                && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            .map { ($0.deletingPathExtension().lastPathComponent, $0) },
+            uniquingKeysWith: { a, _ in a })
         savedNames = savedURLs.keys
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
@@ -296,7 +306,7 @@ final class PrompterModel: NSObject, ObservableObject {
     @discardableResult
     func saveScript(_ name: String, text: String) -> Bool {
         try? FileManager.default.createDirectory(at: libraryDir, withIntermediateDirectories: true)
-        let url = savedURLs[name] ?? scriptURL(name)
+        let url = savedURL(name) ?? scriptURL(name)
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
             refreshSavedNames()
@@ -513,6 +523,21 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
+    /// The Scripts sheet's copy of the never-clobber rule: a library .txt
+    /// edited outside the app since the draft was loaded isn't silently
+    /// overwritten. `snapshot` covers a draft loaded from a library row;
+    /// `libraryBaseline` covers a draft seeded from the owned note.
+    func confirmSheetOverwrite(_ name: String, draft: String, snapshot: String) -> Bool {
+        guard let disk = loadScript(name), disk != draft, disk != snapshot, disk != libraryBaseline
+        else { return true }
+        let a = NSAlert()
+        a.messageText = "“\(name)” changed outside Sticky Prompter"
+        a.informativeText = "Saving will overwrite those outside changes with the sheet's version."
+        a.addButton(withTitle: "Overwrite")
+        a.addButton(withTitle: "Cancel")
+        return alertsEnabled && a.runModal() == .alertFirstButtonReturn
+    }
+
     private var statusClear: Timer?
     func flash(_ msg: String) {
         status = msg
@@ -523,20 +548,35 @@ final class PrompterModel: NSObject, ObservableObject {
     }
 
     func loadScript(_ name: String) -> String? {
-        try? String(contentsOf: savedURLs[name] ?? scriptURL(name), encoding: .utf8)
+        try? String(contentsOf: savedURL(name) ?? scriptURL(name), encoding: .utf8)
     }
 
     @discardableResult
     func deleteScript(_ name: String) -> Bool {
         // move to Trash rather than deleting outright
         do {
-            try FileManager.default.trashItem(at: savedURLs[name] ?? scriptURL(name), resultingItemURL: nil)
+            try FileManager.default.trashItem(at: savedURL(name) ?? scriptURL(name), resultingItemURL: nil)
             refreshSavedNames()
             return true
         } catch {
             refreshSavedNames()
             return false
         }
+    }
+
+    /// A trashed library file must also detach a note that owns it, or the
+    /// next ⌘S/goLive quietly recreates the file. Names compare
+    /// case-insensitively like every other library lookup — the save paths
+    /// can leave scriptName in a different case than the on-disk name.
+    /// Both sides trim too: scriptURL trims when writing, so a persisted
+    /// scriptName with stray whitespace still names the same file.
+    func detachIfOwnsScript(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let owned = scriptName.trimmingCharacters(in: .whitespaces)
+        guard trimmed.caseInsensitiveCompare(owned) == .orderedSame else { return }
+        scriptName = ""
+        libraryBaseline = nil
+        persist()
     }
 
     /// The Scripts sheet may skip the Replace prompt only for a draft the note
@@ -1097,11 +1137,14 @@ struct EditorView: View {
     var nameOK: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// Saving under a name the user didn't just load overwrites that script.
+    /// Case-insensitive: on the default filesystem "talk" IS Talk.txt.
     func confirmOverwrite() -> Bool {
         let n = name.trimmingCharacters(in: .whitespaces)
-        guard n != loadedName, m.savedNames.contains(n) else { return true }
+        guard n.caseInsensitiveCompare(loadedName) != .orderedSame,
+              let existing = m.savedNames.first(where: { $0.caseInsensitiveCompare(n) == .orderedSame })
+        else { return true }
         let a = NSAlert()
-        a.messageText = "Replace the script “\(n)”?"
+        a.messageText = "Replace the script “\(existing)”?"
         a.informativeText = "A script with this name is already in the library."
         a.addButton(withTitle: "Replace")
         a.addButton(withTitle: "Cancel")
@@ -1150,22 +1193,32 @@ struct EditorView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(m.savedNames, id: \.self) { n in
-                                ScriptRow(name: n, selected: n == name) {
+                                ScriptRow(name: n, selected: n.caseInsensitiveCompare(name) == .orderedSame) {
                                     guard confirmDiscard() else { return }
-                                    if let t = m.loadScript(n) { draft = t; name = n; snapshot = t; loadedName = n }
-                                } onDelete: {
-                                    guard m.deleteScript(n) else {
-                                        m.flash("⚠️ Couldn't move “\(n)” to Trash")
+                                    guard let t = m.loadScript(n) else {
+                                        // file gone or unreadable since the list was built
+                                        m.refreshSavedNames()
+                                        let a = NSAlert()
+                                        a.messageText = "Couldn't read “\(n)”"
+                                        a.informativeText = "The file may have been moved or deleted — the list has been refreshed."
+                                        a.runModal()
                                         return
                                     }
-                                    if name == n { name = "" }
-                                    if n == m.scriptName {
-                                        // note's own file just got trashed — detach it
-                                        // so goLive/⌘S don't quietly recreate the file
-                                        m.scriptName = ""
-                                        m.libraryBaseline = nil
-                                        m.persist()
+                                    draft = t; name = n; snapshot = t; loadedName = n
+                                } onDelete: {
+                                    guard m.deleteScript(n) else {
+                                        // the sheet covers the edit-bar status line, so
+                                        // a flash would be invisible — alert instead
+                                        let a = NSAlert()
+                                        a.messageText = "Couldn't move “\(n)” to Trash"
+                                        a.informativeText = "Check the library folder's permissions — some volumes don't support the Trash."
+                                        a.runModal()
+                                        return
                                     }
+                                    if name.caseInsensitiveCompare(n) == .orderedSame { name = "" }
+                                    // note's own file just got trashed — detach it
+                                    // so goLive/⌘S don't quietly recreate the file
+                                    m.detachIfOwnsScript(named: n)
                                 }
                             }
                         }
@@ -1231,13 +1284,30 @@ struct EditorView: View {
                         }
                         .help("Use a text, Markdown or Word file from anywhere as the script")
                         Button {
-                            guard confirmOverwrite() else { return }
-                            if m.saveScript(name, text: draft) {
+                            // confirmOverwrite skips the prompt for the loaded name, so
+                            // the disk-vs-baseline check must still run — same never-clobber
+                            // rule as ⌘S on the note. Trim once and use the trimmed name
+                            // everywhere: scriptURL trims when writing, so an untrimmed
+                            // name here would drift from the on-disk name
+                            let n = name.trimmingCharacters(in: .whitespaces)
+                            guard confirmOverwrite(),
+                                  m.confirmSheetOverwrite(n, draft: draft, snapshot: snapshot) else { return }
+                            if m.saveScript(n, text: draft) {
                                 snapshot = draft
-                                loadedName = name.trimmingCharacters(in: .whitespaces)
+                                loadedName = n
+                                // saved over the note's own script — keep the note
+                                // and its baseline in step, or the next ⌘S/goLive
+                                // claims the change came from outside the app
+                                if m.ownsLibraryScript,
+                                   m.scriptName.caseInsensitiveCompare(loadedName) == .orderedSame {
+                                    m.script = draft
+                                    m.libraryBaseline = draft
+                                    m.rebuild()
+                                    m.persist()
+                                }
                             } else {
                                 let a = NSAlert()
-                                a.messageText = "Couldn't save “\(name)”"
+                                a.messageText = "Couldn't save “\(n)”"
                                 a.informativeText = "Check that the library folder still exists and is writable."
                                 a.runModal()
                             }
@@ -1253,9 +1323,25 @@ struct EditorView: View {
                         }
                         .keyboardShortcut(.cancelAction)   // Esc dismisses the sheet
                         Button("Use Script") {
-                            guard confirmDetachSource(), nameOK ? confirmOverwrite() : true else { return }
-                            if nameOK { m.saveScript(name, text: draft) }
-                            m.scriptName = nameOK ? name : ""
+                            // trimmed name throughout — scriptName must match the
+                            // on-disk name (scriptURL trims) or a later trash of
+                            // that row won't detach the note
+                            let n = name.trimmingCharacters(in: .whitespaces)
+                            guard confirmDetachSource(),
+                                  nameOK ? confirmOverwrite() : true,
+                                  nameOK ? m.confirmSheetOverwrite(n, draft: draft, snapshot: snapshot) : true
+                            else { return }
+                            if nameOK, !m.saveScript(n, text: draft) {
+                                // same failure surface as Save to Library — don't
+                                // close the sheet or claim ownership of a library
+                                // file that was never written
+                                let a = NSAlert()
+                                a.messageText = "Couldn't save “\(n)”"
+                                a.informativeText = "Check that the library folder still exists and is writable."
+                                a.runModal()
+                                return
+                            }
+                            m.scriptName = nameOK ? n : ""
                             m.script = draft
                             m.sourceURL = nil   // library owns the script again
                             m.sourceBaseline = nil
@@ -1352,7 +1438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let p = PrompterPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 460),   // ≥ contentMinSize width
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered, defer: false)
         p.onEscape = { [weak self] in
@@ -1462,7 +1548,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(openFromMenu) || menuItem.action == #selector(saveFromMenu) {
+        if menuItem.action == #selector(openFromMenu) || menuItem.action == #selector(saveFromMenu)
+            || menuItem.action == #selector(toggleMode) || menuItem.action == #selector(toggleMicFromMenu)
+            || menuItem.action == #selector(restartFromMenu) {
             return !model.editing
         }
         return true
@@ -1535,6 +1623,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func showNote() {
+        NSApp.unhide(nil)   // after ⌘H, orderFront alone leaves the window hidden
         if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
     }
@@ -1544,12 +1633,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return false
     }
 
+    // same rule as open/save: while the Scripts sheet is up it owns the note —
+    // goLive here would commit the note's stale text behind the sheet's draft
     @objc func toggleMode() {
+        guard !model.editing else { return }
         if model.live { model.enterEdit() } else { model.goLive() }
         showNote()   // deminiaturize too — live mode in the Dock is useless
     }
 
     @objc func toggleMicFromMenu() {
+        guard !model.editing else { return }
         showNote()   // a hot mic with the note hidden is a dead end
         if !model.live {
             model.goLive()   // tracking needs committed tokens
@@ -1559,6 +1652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc func restartFromMenu() {
+        guard !model.editing else { return }
         model.restartFromTop()
     }
 
@@ -1873,6 +1967,44 @@ func runSelfTest() {
     expectBool("delete missing script returns false", m.deleteScript("no-such-script"), false)
     expectBool("delete existing script returns true", m.deleteScript("Quick"), true)
     expectBool("deleted script leaves the list", m.savedNames.contains("Quick"), false)
+    // library names resolve case-insensitively — the default filesystem is,
+    // so "case test" and "Case Test.txt" are the same file
+    m.saveScript("Case Test", text: "case v1")
+    expectBool("case-insensitive load", m.loadScript("case test") == "case v1", true)
+    m.saveScript("case test", text: "case v2")
+    expectBool("case-insensitive save targets the existing file", m.loadScript("Case Test") == "case v2", true)
+    expectBool("case save doesn't duplicate the listing",
+               m.savedNames.filter { $0.caseInsensitiveCompare("case test") == .orderedSame }.count == 1, true)
+    expectBool("case-insensitive delete", m.deleteScript("CASE TEST"), true)
+    // trashing the note's own file detaches the note even when the typed case
+    // differs from the on-disk name — a stale attachment would let the next
+    // ⌘S/goLive quietly recreate the file the user just trashed
+    m.scriptName = "talk"
+    m.libraryBaseline = "talk body"
+    m.detachIfOwnsScript(named: "Talk")
+    expectBool("trash detaches owning note case-insensitively",
+               m.scriptName.isEmpty && m.libraryBaseline == nil, true)
+    m.scriptName = "Other"
+    m.libraryBaseline = "other body"
+    m.detachIfOwnsScript(named: "Talk")
+    expectBool("trash leaves unrelated note attached",
+               m.scriptName == "Other" && m.libraryBaseline == "other body", true)
+    // whitespace can't keep a note attached either — scriptURL trims, so a
+    // scriptName saved with stray whitespace names the same on-disk file
+    m.scriptName = "Talk "
+    m.libraryBaseline = "talk body"
+    m.detachIfOwnsScript(named: "Talk")
+    expectBool("trash detaches owning note despite whitespace",
+               m.scriptName.isEmpty && m.libraryBaseline == nil, true)
+    m.scriptName = ""
+    m.libraryBaseline = nil
+    // the listing takes .TXT files but not folders named *.txt
+    try? "upper body".write(to: tmp.appendingPathComponent("UPPER.TXT"), atomically: true, encoding: .utf8)
+    try? FileManager.default.createDirectory(at: tmp.appendingPathComponent("folder.txt"), withIntermediateDirectories: true)
+    m.refreshSavedNames()
+    expectBool("uppercase .TXT listed", m.savedNames.contains("UPPER"), true)
+    expectBool("uppercase .TXT loads", m.loadScript("UPPER") == "upper body", true)
+    expectBool("txt-named folder not listed", m.savedNames.contains("folder"), false)
     // the Scripts sheet pre-trusts a name only when the note owns the library
     // script — file opens/imports must go through the Replace prompt
     m.scriptName = "Talk"
@@ -1884,6 +2016,24 @@ func runSelfTest() {
     m.sourceURL = nil             // RTF import: no source, no baseline
     expectBool("import doesn't own library script", m.ownsLibraryScript, false)
     m.scriptName = ""
+    // the Scripts sheet shares the never-clobber rule: a .txt edited outside
+    // the app since the draft was loaded blocks a silent sheet save
+    // (headless alert = cancel)
+    m.saveScript("Sheet", text: "sheet v1")
+    try? "sheet theirs".write(to: tmp.appendingPathComponent("Sheet.txt"), atomically: true, encoding: .utf8)
+    expectBool("sheet save blocked by external edits",
+               m.confirmSheetOverwrite("Sheet", draft: "sheet mine", snapshot: "sheet v1"), false)
+    expectBool("sheet save allowed when disk matches snapshot",
+               m.confirmSheetOverwrite("Sheet", draft: "sheet mine", snapshot: "sheet theirs"), true)
+    expectBool("sheet save allowed when disk matches draft",
+               m.confirmSheetOverwrite("Sheet", draft: "sheet theirs", snapshot: "sheet v1"), true)
+    m.libraryBaseline = "sheet theirs"   // owned-note draft: baseline covers it
+    expectBool("sheet save allowed when disk matches note baseline",
+               m.confirmSheetOverwrite("Sheet", draft: "sheet mine", snapshot: "sheet v1"), true)
+    m.libraryBaseline = nil
+    expectBool("sheet save of a fresh name allowed",
+               m.confirmSheetOverwrite("Brand New", draft: "x", snapshot: ""), true)
+    m.deleteScript("Sheet")
     // failed saves report failure
     let lockedDir = tmp.appendingPathComponent("locked", isDirectory: true)
     try? FileManager.default.createDirectory(at: lockedDir, withIntermediateDirectories: true)
