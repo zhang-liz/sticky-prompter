@@ -732,31 +732,51 @@ final class PrompterModel: NSObject, ObservableObject {
     var autoListen = true   // selftest runs headless: no real mic there
 
     // MARK: auto-scroll (steady pace instead of voice tracking)
+    // Advances line by line: the whole current row is highlighted, and each
+    // row gets time proportional to its word count so the pace stays at the
+    // chosen words-per-minute.
 
     private var autoTimer: Timer?
 
-    /// One steady-pace step. Separated from the timer so the selftest can
-    /// drive it directly.
+    var currentAutoRow: Range<Int>? {
+        rows.first(where: { $0.range.contains(pos) })?.range
+    }
+
+    /// One line hop. Separated from the timer so the selftest can drive it.
     func autoTick() {
         guard live, autoScroll, !autoPaused else { return }
-        if pos < tokens.count {
-            pos += 1
+        if let r = currentAutoRow, r.upperBound < tokens.count {
+            pos = r.upperBound
             anchor = pos
+            rescheduleAutoTimer()
         } else {
+            pos = tokens.count
+            anchor = pos
             autoTimer?.invalidate()
+            autoPaused = true
             flash("🎉 End of script")
         }
     }
 
+    /// Going live never starts the clock — the user sets the speed first
+    /// and hits play.
     func startAutoScroll() {
-        autoPaused = false
+        autoPaused = true
+        autoTimer?.invalidate()
+    }
+
+    func toggleAutoPlay() {
+        autoPaused.toggle()
+        if !autoPaused && pos >= tokens.count { jump(to: 0) }   // replay from the top
         rescheduleAutoTimer()
     }
 
     func rescheduleAutoTimer() {
         autoTimer?.invalidate()
         guard live, autoScroll, !autoPaused else { return }
-        autoTimer = Timer.scheduledTimer(withTimeInterval: 60.0 / max(40, wpm), repeats: true) { [weak self] _ in
+        let rowLen = max(1, currentAutoRow?.count ?? 1)
+        autoTimer = Timer.scheduledTimer(withTimeInterval: Double(rowLen) * 60.0 / max(40, wpm),
+                                         repeats: false) { [weak self] _ in
             self?.autoTick()
         }
     }
@@ -764,6 +784,7 @@ final class PrompterModel: NSObject, ObservableObject {
     func stopAutoScroll() {
         autoTimer?.invalidate()
         autoTimer = nil
+        autoPaused = false
     }
 
     @discardableResult
@@ -854,6 +875,7 @@ final class PrompterModel: NSObject, ObservableObject {
         anchor = pos
         pending = []
         if listening { restartRecognition() } // drop the in-flight utterance
+        if autoScroll { rescheduleAutoTimer() } // new row, new line timing
     }
 
     func nudge(_ delta: Int) { jump(to: pos + delta) }
@@ -1006,14 +1028,19 @@ struct ContentView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
                     ForEach(m.rows) { r in
+                        // auto-scroll highlights the whole current line and keeps
+                        // past lines fully readable; voice mode tracks per word
+                        let lineMode = m.autoScroll
+                        let isCurrentLine = lineMode && r.range.contains(m.pos)
                         WrapWords(lineSpacing: m.fontSize * 0.35) {
                             ForEach(Array(r.range), id: \.self) { i in
                                 Text(m.tokens[i].text + " ")
                                     .font(.system(size: r.heading ? m.fontSize * 1.2 : m.fontSize,
                                                   weight: r.heading ? .bold : .medium, design: .rounded))
-                                    .foregroundColor(i < m.pos ? mainColor.opacity(0.32)
+                                    .foregroundColor(lineMode ? (isCurrentLine ? hiFG : mainColor)
+                                                     : i < m.pos ? mainColor.opacity(0.32)
                                                      : i == m.pos ? hiFG : mainColor)
-                                    .background(i == m.pos ? hiBG : .clear)
+                                    .background((lineMode ? isCurrentLine : i == m.pos) ? hiBG : .clear)
                                     .onTapGesture(count: 2) { m.enterEdit() }
                                     .onTapGesture { m.jump(to: i) }   // click a word = read from here
                             }
@@ -1144,10 +1171,9 @@ struct ContentView: View {
             if m.autoScroll {
                 HStack(spacing: 8) {
                     CtlButton(symbol: m.autoPaused ? "play.fill" : "pause.fill",
-                              help: m.autoPaused ? "Resume auto-scroll" : "Pause auto-scroll",
+                              help: m.autoPaused ? "Start scrolling" : "Pause",
                               color: mainColor) {
-                        m.autoPaused.toggle()
-                        m.rescheduleAutoTimer()
+                        m.toggleAutoPlay()
                     }
                     Slider(value: Binding(get: { m.wpm },
                                           set: { m.wpm = $0; m.persist(); m.rescheduleAutoTimer() }),
@@ -1935,18 +1961,19 @@ func runSelfTest() {
     m.listening = true   // simulate a hot mic (no real recognizer headless)
     m.enterEdit()
     expectBool("enterEdit stops the mic", m.listening, false)
-    // auto-scroll mode: steady tick, pause holds, mic never starts
+    // auto-scroll mode: starts paused, line hops, mic never starts
     m.autoScroll = true
     m.goLive()
     expectBool("auto goLive never touches the mic", m.listening, false)
-    let autoStart = m.pos
+    expectBool("auto goLive starts paused", m.autoPaused, true)
     m.autoTick()
+    expect("paused tick holds", m.pos, 0)
+    m.toggleAutoPlay()
+    expectBool("play starts scrolling", m.autoPaused, false)
     m.autoTick()
-    expect("auto tick advances", m.pos, autoStart + 2)
-    m.autoPaused = true
+    expect("tick hops a full line", m.pos, 7)   // sample row 0 = 7 words
     m.autoTick()
-    expect("paused tick holds", m.pos, autoStart + 2)
-    m.autoPaused = false
+    expectBool("second hop lands on a row start", m.currentAutoRow?.lowerBound == m.pos, true)
     m.enterEdit()
     m.autoScroll = false
     // library round-trip in a user-chosen folder (persistEnabled=false keeps
