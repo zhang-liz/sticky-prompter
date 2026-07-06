@@ -7,12 +7,19 @@ cd "$(dirname "$0")"
 
 APP="StickyPrompter.app"
 
-# app icon — generated once; delete AppIcon.icns to force a redesign rebuild
+# app icon — built from icon-source.png (the sticky-note logo). Delete
+# AppIcon.icns to force a rebuild. Falls back to the programmatic
+# make-icon.swift generator only if no source image is present.
 if [ ! -f AppIcon.icns ]; then
   echo "Generating app icon…"
-  swiftc -O make-icon.swift -o .make-icon
-  ./.make-icon icon_1024.png
-  rm -f .make-icon
+  if [ -f icon-source.png ]; then
+    cp icon-source.png icon_1024.png
+    sips -z 1024 1024 icon_1024.png >/dev/null   # normalize to 1024²
+  else
+    swiftc -O make-icon.swift -o .make-icon
+    ./.make-icon icon_1024.png
+    rm -f .make-icon
+  fi
   rm -rf AppIcon.iconset && mkdir AppIcon.iconset
   for s in 16 32 128 256 512; do
     sips -z "$s" "$s" icon_1024.png --out "AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
