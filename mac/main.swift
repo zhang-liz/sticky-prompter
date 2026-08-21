@@ -43,7 +43,10 @@ func near(_ a: String, _ b: String) -> Bool {
 
 // MARK: - Model
 
-struct Token { let text: String; let norm: String }
+/// `cue` marks a bracketed stage direction like [pause] or [smile]: shown on
+/// the note in a dimmer style, but never expected to be spoken, so its `norm`
+/// is empty and the matcher skips over it like punctuation.
+struct Token { let text: String; let norm: String; var cue = false }
 struct Row: Identifiable {
     let id: Int; let range: Range<Int>; let newPara: Bool
     var heading = false   // markdown heading — rendered bigger and bold
@@ -681,30 +684,39 @@ final class PrompterModel: NSObject, ObservableObject {
         for rawLine in script.components(separatedBy: "\n") {
             var line = rawLine
             var heading = false
-            if md {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("#") {
-                    heading = true
-                    line = String(trimmed.drop(while: { $0 == "#" }))
-                }
-                line = stripInlineMarkdown(line)
+            // a leading # marks a section in any script, not just a .md file:
+            // scripts typed straight onto the note have no source file at all
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") {
+                heading = true
+                line = String(trimmed.drop(while: { $0 == "#" }))
             }
+            if md { line = stripInlineMarkdown(line) }
             let words = line.split(separator: " ").map(String.init).filter { !$0.isEmpty }
             if words.isEmpty { continue }
             var start = tokens.count
             var newPara = rid > 0
+            var inCue = false   // spans words: [look at the camera]
             for w in words {
-                let n = normWord(w)
-                if n.isEmpty, tokens.count > start {
+                let opens = w.contains("[")
+                let closes = w.contains("]")
+                let isCue = inCue || opens
+                if opens && !closes { inCue = true }
+                if closes { inCue = false }
+                // a stage direction is never spoken, so it carries no norm and
+                // the matcher walks past it exactly like punctuation
+                let n = isCue ? "" : normWord(w)
+                if n.isEmpty, !isCue, tokens.count > start {
                     // punctuation-only fragment: glue to the previous word
                     let prev = tokens.removeLast()
-                    tokens.append(Token(text: prev.text + " " + w, norm: prev.norm))
+                    tokens.append(Token(text: prev.text + " " + w, norm: prev.norm, cue: prev.cue))
                 } else {
-                    tokens.append(Token(text: w, norm: n))
+                    tokens.append(Token(text: w, norm: n, cue: isCue))
                 }
                 // close the row at sentence-final punctuation so scrolling can
-                // pin the sentence being read to the top edge of the window
-                if endsSentence(w), tokens.count > start {
+                // pin the sentence being read to the top edge of the window;
+                // never mid-direction, where "[pause.]" would split the row
+                if endsSentence(w), !isCue, !inCue, tokens.count > start {
                     rows.append(Row(id: rid, range: start..<tokens.count, newPara: newPara, heading: heading))
                     rid += 1
                     start = tokens.count
@@ -2118,6 +2130,38 @@ func runSelfTest() {
     expectBool("goLive sets live", m.live, true)
     m.enterEdit()
     expectBool("enterEdit clears live", m.live, false)
+
+    // stage directions: shown, never spoken, never matched
+    let liveScript = m.script
+    m.script = "Hello there [pause] welcome back"
+    m.rebuild()
+    expectBool("cue token flagged", m.tokens.contains { $0.cue }, true)
+    expectBool("cue carries no norm", m.tokens.first { $0.cue }?.norm.isEmpty == true, true)
+    m.handleTranscript(["hello", "there", "welcome", "back"], isFinal: true)
+    expect("speech skips the direction", m.pos, m.tokens.count)
+    // a direction spanning several words stays one unbroken cue
+    m.script = "Ready [look at the camera] and go"
+    m.rebuild()
+    expect("multi-word direction all cue", m.tokens.filter { $0.cue }.count, 4)
+    m.handleTranscript(["ready", "and", "go"], isFinal: true)
+    expect("speech skips a long direction", m.pos, m.tokens.count)
+    // "[pause.]" must not split the row mid-direction
+    m.script = "Wait [pause.] then continue"
+    m.rebuild()
+    expect("direction doesn't split the row", m.rows.count, 1)
+    // a direction must not prime the recognizer with words nobody says
+    m.script = "Speak now [teleprompter]"
+    m.rebuild()
+    expectBool("direction stays out of vocab", m.vocab.contains("teleprompter"), false)
+
+    // sections: a leading # is a heading in any script, not just .md
+    m.sourceURL = nil
+    m.script = "# Intro\nHello there"
+    m.rebuild()
+    expectBool("heading in a plain script", m.rows.first?.heading == true, true)
+    expectBool("hash stripped from heading", m.tokens.first?.text.contains("#") == true, false)
+    m.script = liveScript
+    m.rebuild()
     // the mic belongs to live mode only — every exit must shut it off
     m.goLive()
     m.listening = true   // simulate a hot mic (no real recognizer headless)
