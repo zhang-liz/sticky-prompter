@@ -112,8 +112,11 @@ final class PrompterModel: NSObject, ObservableObject {
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Timer?
     private var taskGen = 0   // stale-task guard: cancelled tasks still fire callbacks
+    private var sessionGen = 0 // stale-permission guard: the auth prompt outlives the request
     private var consecutiveErrors = 0
     private var persistSub: AnyCancellable?
+    private var configObserver: NSObjectProtocol?
+    private var maxDurationTimer: Timer?
 
     override init() {
         let d = UserDefaults.standard
@@ -843,6 +846,10 @@ final class PrompterModel: NSObject, ObservableObject {
     }
 
     func enterEdit() {
+        // unconditional: a permission prompt raised by startListening may still
+        // be on screen with listening == false, and its callback must not open
+        // the mic once we're back in edit mode
+        sessionGen += 1
         if listening { stopListening() }
         stopAutoScroll()
         live = false
@@ -930,11 +937,18 @@ final class PrompterModel: NSObject, ObservableObject {
     func toggleMic() { listening ? stopListening() : startListening() }
 
     func startListening() {
+        // the permission sheet can sit on screen for a long time; if the user
+        // leaves live mode meanwhile, the callback must not open a hot mic
+        // behind their back
+        sessionGen += 1
+        let gen = sessionGen
         SFSpeechRecognizer.requestAuthorization { auth in
             DispatchQueue.main.async {
+                guard gen == self.sessionGen else { return }
                 guard auth == .authorized else { self.status = "⚠️ Speech recognition permission denied (System Settings → Privacy)"; return }
                 AVCaptureDevice.requestAccess(for: .audio) { ok in
                     DispatchQueue.main.async {
+                        guard gen == self.sessionGen else { return }
                         guard ok else { self.status = "⚠️ Microphone permission denied (System Settings → Privacy)"; return }
                         self.beginSession()
                     }
@@ -955,15 +969,35 @@ final class PrompterModel: NSObject, ObservableObject {
         }
         audioEngine.prepare()
         do { try audioEngine.start() } catch {
+            // don't leave the tap behind retaining its closure on a dead engine
+            input.removeTap(onBus: 0)
+            audioEngine.stop()
             status = "⚠️ Audio engine failed: \(error.localizedDescription)"
             return
         }
+        observeConfigChanges()
         listening = true
         anchor = pos
         pending = []
         consecutiveErrors = 0
         status = "Listening…"
         startTask(rec)
+    }
+
+    /// Plugging in headphones mid-session reconfigures the audio graph: the tap
+    /// stops delivering buffers while `listening` stays true, so the note claims
+    /// to be listening forever. Rebuild the session against the new device.
+    private func observeConfigChanges() {
+        guard configObserver == nil else { return }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine, queue: .main) { [weak self] _ in
+            guard let self = self, self.listening else { return }
+            let resumeAt = self.pos
+            self.stopListening()
+            self.pos = resumeAt
+            self.startListening()
+        }
     }
 
     private func startTask(_ rec: SFSpeechRecognizer) {
@@ -977,6 +1011,7 @@ final class PrompterModel: NSObject, ObservableObject {
         // NOTE: server-based recognition is noticeably more accurate than
         // on-device, so we don't set requiresOnDeviceRecognition
         request = req
+        scheduleMaxDurationRollover()
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self = self, self.listening, gen == self.taskGen else { return }
@@ -1011,6 +1046,17 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
+    /// Apple caps a recognition task at about a minute of audio. The silence
+    /// timer re-arms on every partial result, so someone reading fluently never
+    /// pauses long enough to roll over and would hit the cap as a run of errors.
+    private func scheduleMaxDurationRollover() {
+        maxDurationTimer?.invalidate()
+        maxDurationTimer = Timer.scheduledTimer(withTimeInterval: 50, repeats: false) { [weak self] _ in
+            guard let self = self, self.listening else { return }
+            self.restartRecognition()
+        }
+    }
+
     func restartRecognition() {
         guard listening, let rec = recognizer else { return }
         anchor = pos
@@ -1024,6 +1070,9 @@ final class PrompterModel: NSObject, ObservableObject {
 
     func stopListening() {
         listening = false
+        sessionGen += 1   // strand any permission callback still in flight
+        maxDurationTimer?.invalidate()
+        maxDurationTimer = nil
         silenceTimer?.invalidate()
         task?.cancel()
         task = nil
