@@ -1659,11 +1659,13 @@ struct EditorView: View {
                         .frame(minWidth: 400, minHeight: 320)
                     HStack(spacing: 8) {
                         Button {
+                            // sheet-local on purpose: this only blanks the draft.
+                            // Detaching the note is File ▸ New Script (⌘N).
                             if confirmDiscard() { draft = ""; name = ""; snapshot = ""; loadedName = "" }
                         } label: {
-                            Label("New", systemImage: "plus")
+                            Label("Clear Editor", systemImage: "plus")
                         }
-                        .help("Start a blank script")
+                        .help("Empty this editor — the note keeps its current script")
                         Button {
                             guard confirmDiscard() else { return }
                             // close the sheet before running the open panel —
