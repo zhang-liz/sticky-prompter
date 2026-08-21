@@ -1310,7 +1310,8 @@ struct ContentView: View {
                     Color.clear.frame(height: 340)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 10)
+                // no top padding in live mode: every point above the text is a
+                // point further from the camera
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .contentShape(Rectangle())
@@ -1320,7 +1321,7 @@ struct ContentView: View {
                 // previous glide is still running, and a spring blends them into
                 // one continuous motion instead of restarting the ease each time
                 withAnimation(.interpolatingSpring(stiffness: 90, damping: 18)) {
-                    proxy.scrollTo(m.currentRowID, anchor: UnitPoint(x: 0, y: 0.02))
+                    proxy.scrollTo(m.currentRowID, anchor: .topLeading)
                 }
             }
             }
