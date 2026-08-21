@@ -610,88 +610,81 @@ final class PrompterModel: NSObject, ObservableObject {
 
     /// One-click / ⌘S save of what's on the note. Scripts opened from a file
     /// save back to that file; otherwise the library. No name yet → ask for one.
-    func saveCurrentScript() {
-        if let u = sourceURL { saveToSource(u); return }
-        let n = scriptName.trimmingCharacters(in: .whitespaces)
-        guard !n.isEmpty else {
-            guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                flash("Nothing to save yet")
-                return
-            }
-            if live { enterEdit() }   // stop the mic before a modal prompt
-            guard let newName = promptScriptName() else { return }
-            if savedNames.contains(where: { $0.caseInsensitiveCompare(newName) == .orderedSame }),
-               !confirmReplaceLibraryScript(newName) { return }
-            if saveScript(newName, text: script) {
-                scriptName = newName
-                libraryBaseline = script
-                persist()
-                flash("Saved “\(newName)”")
-            } else {
-                flash("⚠️ Couldn't save “\(newName)” — check the library folder")
-            }
-            return
-        }
-        // same never-clobber rule as source files: a library .txt edited
-        // outside the app isn't silently overwritten
-        if let disk = loadScript(n), disk != script, disk != libraryBaseline {
-            let a = NSAlert()
-            a.messageText = "“\(n)” changed outside Sticky Prompter"
-            a.informativeText = "Saving will overwrite those outside changes with the note's version."
-            a.addButton(withTitle: "Overwrite")
-            a.addButton(withTitle: "Cancel")
-            guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else {
-                flash("⚠️ Not saved — “\(n)” changed on disk")
-                return
-            }
-        }
-        if saveScript(n, text: script) {
-            libraryBaseline = script
-            flash("Saved “\(n)”")
-        } else {
-            flash("⚠️ Couldn't save “\(n)” — check the library folder")
-        }
-    }
-
-    /// Save the current text under a NEW library name, leaving whatever it was
-    /// attached to untouched on disk. Detaching is the point: without it the
-    /// `if let u = sourceURL` at the top of saveCurrentScript keeps winning and
-    /// the new name would never be used again.
-    /// Identity doesn't move until the write succeeds, so Cancel and a failed
-    /// write both leave the old save target exactly as it was.
-    func saveScriptAs() {
+    /// Saving always asks where and under what name. Nothing is ever written
+    /// over without the save panel naming the file first.
+    func saveCurrentScript(suggestCopy: Bool = false) {
         guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             flash("Nothing to save yet")
             return
         }
-        if live { enterEdit() }   // stop the mic before a modal prompt
+        if live { enterEdit() }   // stop the mic before a modal panel
+        guard alertsEnabled else { return }   // headless: treat as cancel
         refreshSavedNames()       // Finder may have added files since launch
-        let current = scriptName.trimmingCharacters(in: .whitespaces)
-        let from = sourceURL?.lastPathComponent ?? (current.isEmpty ? nil : current)
-        let info = from.map {
-            "Saved as a new .txt in the library. “\($0)” keeps its current contents, and ⌘S saves to the new name from now on."
-        } ?? "It's saved in the library as a .txt file."
-        let stem = current.isEmpty
-            ? (sourceURL?.deletingPathExtension().lastPathComponent ?? "")
-            : current
-        guard let newName = promptScriptName(title: "Save script as",
-                                             info: info,
-                                             prefill: uniqueLibraryName(stem)) else { return }
-        // the suggested name never collides, but a typed one still can
-        if savedNames.contains(where: { $0.caseInsensitiveCompare(newName) == .orderedSame }),
-           !confirmReplaceLibraryScript(newName) { return }
-        guard saveScript(newName, text: script) else {
-            flash("⚠️ Couldn't save “\(newName)” — check the library folder")
-            return   // identity untouched: ⌘S still targets the old file
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        // keep .docx offered when the script came from one, so saving back to
+        // the original stays possible instead of silently becoming a .txt
+        if let u = sourceURL, Self.isWordFile(u), let t = UTType(filenameExtension: u.pathExtension) {
+            panel.allowedContentTypes = [t, .plainText]
+        } else {
+            panel.allowedContentTypes = [.plainText]
         }
-        // only now is it safe to move. Name and baseline go together, or
-        // ownsLibraryScript lies and the next save sees a phantom external edit.
-        detach()
-        scriptName = newName
-        libraryBaseline = script
-        persist()
-        flash("Saved “\(newName)”")
+        panel.message = suggestCopy ? "Save a copy of this script." : "Save this script."
+        // start where the script already lives, else the library
+        let current = scriptName.trimmingCharacters(in: .whitespaces)
+        panel.directoryURL = sourceURL?.deletingLastPathComponent() ?? libraryDir
+        let stem = current.isEmpty
+            ? (sourceURL?.deletingPathExtension().lastPathComponent ?? "Script")
+            : current
+        let ext = (sourceURL.map { Self.isWordFile($0) } ?? false)
+            ? (sourceURL?.pathExtension ?? "txt") : "txt"
+        panel.nameFieldStringValue = suggestCopy ? "\(uniqueLibraryName(stem)).\(ext)"
+                                                 : "\(stem).\(ext)"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // a Word original keeps its format; everything else is written as the
+        // plain text the panel asked for
+        if Self.isWordFile(url) {
+            // the exporter reads back with a trailing newline, so add it first
+            // or the note, baseline and disk disagree the moment it's written
+            if !script.hasSuffix("\n") { script += "\n" }
+            guard writeWordFile(url) else {
+                flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
+                return
+            }
+        } else {
+            do {
+                try script.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                flash("⚠️ Couldn't save “\(url.lastPathComponent)” — \(error.localizedDescription)")
+                return
+            }
+        }
+        adoptSavedFile(url)
+        flash("Saved “\(url.lastPathComponent)”")
     }
+
+    /// Point the note at the file that was just written, so the footer names it
+    /// and a later external edit is still detected.
+    private func adoptSavedFile(_ url: URL) {
+        detach()
+        let inLibrary = url.deletingLastPathComponent().standardizedFileURL == libraryDir.standardizedFileURL
+        scriptName = url.deletingPathExtension().lastPathComponent
+        if inLibrary {
+            libraryBaseline = script
+            refreshSavedNames()
+        } else {
+            sourceURL = url
+            sourceBaseline = script
+        }
+        noteRecent(url)
+        persist()
+    }
+
+    /// Kept so ⇧⌘S and the menu item still work. Plain ⌘S already asks where
+    /// and under what name, so "save as" is the same panel; it just suggests a
+    /// non-colliding name rather than the current one.
+    func saveScriptAs() { saveCurrentScript(suggestCopy: true) }
 
     /// Start a blank script with no save target — the next ⌘S asks for a name
     /// instead of rewriting whatever was open before.
@@ -2462,14 +2455,17 @@ func runSelfTest() {
     m.saveScript("Test Script", text: "hello world")
     expectBool("save lists script", m.savedNames == ["Test Script"], true)
     expectBool("load round-trips", m.loadScript("Test Script") == "hello world", true)
-    // quick save (⌘S / toolbar button)
-    m.script = "quick save body"
+    // ⌘S always opens the save panel, even for a script that already has a
+    // name — nothing is written until the panel names a file
+    m.saveScript("Quick", text: "quick save body")
+    m.script = "edited since"
     m.scriptName = "Quick"
     m.saveCurrentScript()
-    expectBool("quick save writes named script", m.loadScript("Quick") == "quick save body", true)
+    expectBool("named save never writes without the panel",
+               m.loadScript("Quick") == "quick save body", true)
     m.editing = false
     m.scriptName = ""
-    // unnamed save asks for a name (headless: prompt counts as Cancel — no write, no sheet)
+    // unnamed save asks too (headless: panel counts as Cancel — no write, no sheet)
     let namesBefore = m.savedNames
     m.saveCurrentScript()
     expectBool("unnamed save prompts, cancel writes nothing", m.savedNames == namesBefore && m.editing == false, true)
@@ -2487,9 +2483,12 @@ func runSelfTest() {
     let ext = tmp.appendingPathComponent("external.txt")
     try? "original".write(to: ext, atomically: true, encoding: .utf8)
     m.sourceURL = ext
+    m.sourceBaseline = "original"
     m.script = "edited body"
     m.saveCurrentScript()
-    expectBool("source file save-back", (try? String(contentsOf: ext, encoding: .utf8)) == "edited body", true)
+    expectBool("source file isn't rewritten without the panel",
+               (try? String(contentsOf: ext, encoding: .utf8)) == "original", true)
+    // going live still syncs the file the note is already attached to
     m.script = "live body"
     m.goLive()
     expectBool("goLive syncs source file", (try? String(contentsOf: ext, encoding: .utf8)) == "live body", true)
@@ -2517,7 +2516,8 @@ func runSelfTest() {
     m.sourceBaseline = PrompterModel.readScriptFile(docx)   // as openScriptFile would
     m.wordSaveApproved = true
     m.script = "rewritten body"
-    m.saveCurrentScript()
+    _ = m.writeWordFile(docx)   // what the save panel calls for a Word target
+    m.sourceBaseline = PrompterModel.readScriptFile(docx)
     expectBool("docx write-back", PrompterModel.readScriptFile(docx)?.contains("rewritten body") == true, true)
     // goLive doesn't rewrite an approved Word doc when nothing changed (mtime churn)
     m.script = PrompterModel.readScriptFile(docx) ?? "rewritten body"
@@ -2527,15 +2527,14 @@ func runSelfTest() {
     let mtAfter = (try? FileManager.default.attributesOfItem(atPath: docx.path)[.modificationDate]) as? Date
     expectBool("goLive skips unchanged Word doc", mtBefore != nil && mtBefore == mtAfter, true)
     // Word save must not poison its own baseline: a note without a trailing
-    // newline reads back from the exporter with one — after ⌘S note, baseline
-    // and disk agree, so a second ⌘S takes the quiet no-alert path
-    m.script = "no trailing newline"
-    m.saveCurrentScript()
+    // newline reads back from the exporter with one, so after a save the note,
+    // baseline and disk have to agree or the next save cries "changed on disk"
+    m.script = "no trailing newline\n"   // the save path normalizes this first
+    _ = m.writeWordFile(docx)
+    m.sourceBaseline = PrompterModel.readScriptFile(docx)
     expectBool("docx save aligns note, baseline and disk",
                PrompterModel.readScriptFile(docx) == m.script && m.script == m.sourceBaseline, true)
-    m.saveCurrentScript()   // a poisoned baseline would alert (headless = cancel) and skip the write
-    expectBool("second docx save stays clean",
-               PrompterModel.readScriptFile(docx) == m.script && m.script == m.sourceBaseline, true)
+    expectBool("docx save leaves nothing unsaved", m.noteHasUnsavedChanges, false)
     m.enterEdit()
     m.sourceURL = nil
     // legacy .doc write-back stays real .doc bytes (not mislabeled docx)
@@ -2547,7 +2546,7 @@ func runSelfTest() {
     m.sourceURL = doc
     m.sourceBaseline = PrompterModel.readScriptFile(doc)
     m.script = "doc rewritten body"
-    m.saveCurrentScript()
+    _ = m.writeWordFile(doc)
     expectBool("doc write-back", PrompterModel.readScriptFile(doc)?.contains("doc rewritten body") == true, true)
     let docBytes = (try? Data(contentsOf: doc)) ?? Data()
     expectBool("doc write-back is Word 97 format", docBytes.starts(with: [0xD0, 0xCF, 0x11, 0xE0]), true)
@@ -2586,7 +2585,8 @@ func runSelfTest() {
     // library scripts get the same never-clobber rule
     m.scriptName = "Lib"
     m.script = "lib v1"
-    m.saveCurrentScript()
+    m.saveScript("Lib", text: "lib v1")
+    m.libraryBaseline = "lib v1"
     expectBool("library save sets baseline", m.loadScript("Lib") == "lib v1", true)
     try? "lib theirs".write(to: tmp.appendingPathComponent("Lib.txt"), atomically: true, encoding: .utf8)
     m.script = "lib mine"
