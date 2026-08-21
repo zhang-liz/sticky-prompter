@@ -1022,8 +1022,13 @@ final class PrompterModel: NSObject, ObservableObject {
         task = nil
         request?.endAudio()
         request = nil
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
+        // only touch the engine if it was actually started — reaching for
+        // inputNode instantiates the audio HAL, which blocks indefinitely in a
+        // headless process (e.g. --selftest)
+        if audioEngine.isRunning {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            audioEngine.stop()
+        }
         anchor = pos
         pending = []
         status = ""
