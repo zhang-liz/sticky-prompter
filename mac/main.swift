@@ -1268,6 +1268,10 @@ struct ContentView: View {
                 editor
             }
         }
+        // the hosting view otherwise keeps its content below the 28pt title bar
+        // even with .fullSizeContentView, which is dead space right where the
+        // script wants to be
+        .ignoresSafeArea(.all)
         .background(bgColor)
         .sheet(isPresented: $m.editing) { EditorView(m: m) }
     }
@@ -1464,7 +1468,11 @@ struct ContentView: View {
             .disabled(scriptEmpty)
             .help(scriptEmpty ? "Type or open a script first" : "Start prompting (Esc)")
         }
-        .padding(.horizontal, 12)
+        // the window draws its content under the title bar, so the bar sits in
+        // that row instead of below it — indented past the traffic lights,
+        // which is the whole strip reclaimed for the script
+        .padding(.leading, 72)
+        .padding(.trailing, 12)
         .padding(.vertical, 7)
         .background(.thinMaterial)
         .overlay(alignment: .bottom) {
@@ -1968,7 +1976,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         p.hasShadow = true
         // invisible in screen recordings & screen shares (persisted preference)
         p.sharingType = model.captureHidden ? .none : .readOnly
-        p.contentView = NSHostingView(rootView: ContentView(m: model))
+        let host = NSHostingView(rootView: ContentView(m: model))
+        // let the content own the title bar row too — the buttons still float
+        // above it, and the edit bar is indented past them. On 13.0-13.2 the
+        // .ignoresSafeArea in ContentView is the only lever available.
+        if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
+        p.contentView = host
         p.contentMinSize = NSSize(width: 420, height: 220)   // keep the edit bar readable
         p.setFrameAutosaveName("StickyPrompterWindow")
         if p.frame.origin == .zero {
