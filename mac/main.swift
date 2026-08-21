@@ -1354,7 +1354,9 @@ struct ContentView: View {
                 .modifier(ClearTextEditor())
                 .frame(width: columnW)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                // no top padding: typing starts at the same height the live
+                // text will, so the note reads the same in both modes
+                .padding(.bottom, 8)
                 .onExitCommand { m.goLive() }   // Esc commits and goes live
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1591,10 +1593,42 @@ struct CtlButton: View {
 struct ClearTextEditor: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 13.0, *) {
-            content.scrollContentBackground(.hidden)
+            content.scrollContentBackground(.hidden).flushTopInset()
         } else {
-            content
+            content.flushTopInset()
         }
+    }
+}
+
+extension View {
+    /// SwiftUI's TextEditor wraps an NSTextView that carries its own top inset,
+    /// which shows up as a gap above the first line no matter what padding the
+    /// SwiftUI side uses. Clear it so edit mode starts at the same height as live.
+    func flushTopInset() -> some View {
+        background(TextViewInsetReset())
+    }
+}
+
+/// Walks up from a zero-sized probe view to find the sibling NSTextView.
+private struct TextViewInsetReset: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+
+    func updateNSView(_ v: NSView, context: Context) {
+        // the probe sits directly behind its TextEditor, so the text view we
+        // want is inside that one parent — never the whole window, or the
+        // library sheet's editor loses its inset too
+        DispatchQueue.main.async {
+            guard let parent = v.superview, let tv = Self.firstTextView(in: parent) else { return }
+            tv.textContainerInset = NSSize(width: tv.textContainerInset.width, height: 0)
+        }
+    }
+
+    private static func firstTextView(in view: NSView) -> NSTextView? {
+        if let tv = view as? NSTextView { return tv }
+        for sub in view.subviews {
+            if let tv = firstTextView(in: sub) { return tv }
+        }
+        return nil
     }
 }
 
