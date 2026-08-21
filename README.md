@@ -97,6 +97,7 @@ Open **http://localhost:4173** in Chrome.
 | <kbd>R</kbd> | restart from the top |
 | <kbd>E</kbd> or double-click | back to edit mode |
 | click any word | read from there |
+| scroll by hand | re-read something; tracking waits ~3s, then picks you back up |
 | <kbd>⌘S</kbd> | save the script |
 | <kbd>⇧⌘S</kbd> | save a copy under a new name |
 | <kbd>⌘N</kbd> | start a blank script |

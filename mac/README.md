@@ -33,6 +33,7 @@ Requires Xcode Command Line Tools (`xcode-select --install` if missing). The bui
 | A- / A+ | text size |
 | color swatch | background color (text auto-adjusts light/dark for readability) |
 | slider | background transparency |
+| column slider | text column width in live mode — narrower lines keep your eyes near the lens |
 | <img src="../docs/icons/save.svg" width="15" height="15" alt=""> | save the script (`⌘S`) |
 | <img src="../docs/icons/folder-open.svg" width="15" height="15" alt=""> | open a file as the script (`⌘O`) |
 | <img src="../docs/icons/play.svg" width="15" height="15" alt=""> Go Live | switch to live mode (or press `Esc`) |
@@ -43,6 +44,7 @@ The script library lives in **File ▸ Scripts Library…** (`⌘L`).
 
 - `space` mic on/off · `←`/`→` nudge a word · `↑`/`↓` jump ~a line · `R` restart
 - **click any word** to read from there — the fastest way back in sync after a detour
+- **scroll by hand** to re-read something; tracking waits about 3 seconds, then picks you back up
 - **double-click the text** (or press `E`) to go back to edit mode
 
 Drag the note anywhere by its background. Resize from any edge. Position, script, colors, and all toggles persist across launches. Closing the note hides it — bring it back from the menu-bar icon or by reopening the app; quit from the menu-bar icon.
