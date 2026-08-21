@@ -49,7 +49,13 @@ The script library lives in **File ▸ Scripts Library…** (`⌘L`).
 
 Drag the note anywhere by its background. Resize from any edge. Position, script, colors, and all toggles persist across launches. Closing the note hides it — bring it back from the menu-bar icon or by reopening the app; quit from the menu-bar icon.
 
-**Menu bar icon** (<img src="../docs/icons/sticky-note.svg" width="15" height="15" alt="">)**:** edit/live toggle, voice tracking, restart, click-through mode, hide/show from screen recordings, re-show the note, quit.
+**Menu bar icon** (<img src="../docs/icons/sticky-note.svg" width="15" height="15" alt="">)**:** edit/live toggle, voice tracking, restart, click-through mode, hide/show from screen recordings, re-show the note, check for updates, quit.
+
+## Updates
+
+On launch the app asks GitHub for the latest release number. When there's a newer one, the edit bar shows an **Update** button and the menu bar item becomes **Update to vX.Y.Z…**; both open the download page. It's one anonymous request with no identifiers, and **Check automatically on launch** in the menu bar turns it off.
+
+Updates are not installed in place. The app isn't notarized, so replacing the bundle would put the "unverified developer" warning back on every update instead of only the first launch. Installing the new DMG over the old app keeps your scripts, position, colours and preferences, which live outside the app bundle.
 
 ## Script library
 

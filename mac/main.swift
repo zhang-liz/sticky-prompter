@@ -112,6 +112,8 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
     @Published var sourceURL: URL?   // external file the script came from; saves write back to it
     @Published var panelIsKey = true // live-mode shortcuts only work while the note is key
+    @Published var updateAvailable: String?   // tag of a newer release, once seen
+    @Published var checkUpdatesOnLaunch = true
     var sourceBaseline: String?      // file content at last load/save — detects external edits
     var libraryBaseline: String?     // library file content at last load/save — same check
     var alertsEnabled = true         // selftest runs headless; treat alerts as "cancel"
@@ -158,6 +160,7 @@ final class PrompterModel: NSObject, ObservableObject {
         autoScroll = d.bool(forKey: "autoScroll")
         wpm = d.object(forKey: "wpm") as? Double ?? 140
         columnWidth = d.object(forKey: "columnWidth") as? Double ?? 1.0
+        checkUpdatesOnLaunch = d.object(forKey: "checkUpdatesOnLaunch") as? Bool ?? true
         recentFiles = (d.array(forKey: "recentFiles") as? [String] ?? [])
             .map { URL(fileURLWithPath: $0) }
         if let path = d.string(forKey: "libraryDir") {
@@ -270,6 +273,7 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(autoScroll, forKey: "autoScroll")
         d.set(wpm, forKey: "wpm")
         d.set(columnWidth, forKey: "columnWidth")
+        d.set(checkUpdatesOnLaunch, forKey: "checkUpdatesOnLaunch")
         d.set(recentFiles.map { $0.path }, forKey: "recentFiles")
         d.set(libraryDir.path, forKey: "libraryDir")
         if let u = sourceURL { d.set(u.path, forKey: "sourceURL") }
@@ -727,6 +731,71 @@ final class PrompterModel: NSObject, ObservableObject {
         statusClear = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: false) { [weak self] _ in
             if self?.status == msg { self?.status = "" }
         }
+    }
+
+    // MARK: updates
+    //
+    // The app has no auto-installer: it isn't notarized, so replacing the
+    // bundle would re-trigger Gatekeeper's "unverified developer" wall on every
+    // update. Instead it asks GitHub what the newest release is and points at
+    // the download. One anonymous GET, no identifiers, and only when the user
+    // leaves the check on.
+
+    static let releasesAPI = URL(string: "https://api.github.com/repos/zhang-liz/sticky-prompter/releases/latest")!
+    static let releasesPage = URL(string: "https://github.com/zhang-liz/sticky-prompter/releases/latest")!
+
+    static var bundleVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+    }
+
+    /// True when `latest` is newer than `current`. Compares numerically per
+    /// component so 1.10.0 beats 1.9.0, and tolerates a leading "v" and a
+    /// missing patch level ("1.3" == "1.3.0").
+    static func isNewer(_ latest: String, than current: String) -> Bool {
+        func parts(_ s: String) -> [Int] {
+            s.trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+                .split(separator: ".")
+                .map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        }
+        let a = parts(latest), b = parts(current)
+        for i in 0..<max(a.count, b.count) {
+            let l = i < a.count ? a[i] : 0
+            let r = i < b.count ? b[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    func checkForUpdate(userAsked: Bool = false) {
+        guard userAsked || checkUpdatesOnLaunch else { return }
+        if userAsked { flash("Checking for updates…") }
+        var req = URLRequest(url: Self.releasesAPI)
+        req.timeoutInterval = 10
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self = self else { return }
+            let tag = data
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                .flatMap { $0?["tag_name"] as? String }
+            DispatchQueue.main.async {
+                guard let tag = tag else {
+                    if userAsked { self.flash("⚠️ Couldn't reach GitHub") }
+                    return
+                }
+                if Self.isNewer(tag, than: Self.bundleVersion) {
+                    self.updateAvailable = tag
+                    self.flash("Update available: \(tag)")
+                } else if userAsked {
+                    self.flash("You're on the latest version")
+                }
+            }
+        }.resume()
+    }
+
+    func openReleasesPage() {
+        NSWorkspace.shared.open(Self.releasesPage)
+        updateAvailable = nil
     }
 
     func loadScript(_ name: String) -> String? {
@@ -1390,6 +1459,16 @@ struct ContentView: View {
                 .layoutPriority(1)   // don't let the controls squeeze the name to one letter
                 .foregroundColor(.primary.opacity(0.6))
             Spacer(minLength: 6)
+            if let tag = m.updateAvailable {
+                Button { m.openReleasesPage() } label: {
+                    Label("Update \(tag)", systemImage: "arrow.down.circle.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .fixedSize()
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.primary.opacity(0.85))
+                .help("A newer version is on GitHub — click to open the download page")
+            }
             HStack(spacing: 1) {
                 ctl("textformat.size.smaller", help: "Smaller text") { m.fontSize = max(13, m.fontSize - 2); m.persist() }
                 ctl("textformat.size.larger", help: "Bigger text") { m.fontSize = min(48, m.fontSize + 2); m.persist() }
@@ -2018,6 +2097,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: .main) { [weak self] _ in
             self?.model.panelIsKey = false
         }
+        model.checkForUpdate()   // no-op when the user has switched it off
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -2182,9 +2262,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         show.target = self
         menu.addItem(show)
         menu.addItem(.separator())
+        let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdatesFromMenu), keyEquivalent: "")
+        check.target = self
+        check.tag = 4
+        menu.addItem(check)
+        let auto = NSMenuItem(title: "Check automatically on launch", action: #selector(toggleUpdateChecks), keyEquivalent: "")
+        auto.target = self
+        auto.tag = 5
+        auto.state = model.checkUpdatesOnLaunch ? .on : .off
+        menu.addItem(auto)
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Sticky Prompter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         statusItem.menu = menu
+    }
+
+    @objc func checkUpdatesFromMenu() {
+        if model.updateAvailable != nil { model.openReleasesPage() }
+        else { model.checkForUpdate(userAsked: true) }
+    }
+
+    @objc func toggleUpdateChecks(_ sender: NSMenuItem) {
+        model.checkUpdatesOnLaunch.toggle()
+        sender.state = model.checkUpdatesOnLaunch ? .on : .off
+        model.persist()
     }
 
     @objc func toggleClickThrough(_ sender: NSMenuItem) {
@@ -2267,6 +2368,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         statusItem?.menu?.item(withTag: 1)?.state = model.clickThrough ? .on : .off
         statusItem?.menu?.item(withTag: 2)?.title = live ? "Edit script" : "Go live"
+        statusItem?.menu?.item(withTag: 4)?.title = model.updateAvailable
+            .map { "Update to \($0)…" } ?? "Check for Updates…"
     }
 
     func setupKeys() {
@@ -2806,6 +2909,30 @@ func runSelfTest() {
     m.deleteScript("Talk")
     m.detach()
     m.script = ""
+
+    // ── update version comparison ──
+    expectBool("newer patch", PrompterModel.isNewer("1.3.1", than: "1.3.0"), true)
+    expectBool("newer minor", PrompterModel.isNewer("1.4.0", than: "1.3.9"), true)
+    expectBool("newer major", PrompterModel.isNewer("2.0.0", than: "1.9.9"), true)
+    expectBool("same version isn't newer", PrompterModel.isNewer("1.3.0", than: "1.3.0"), false)
+    expectBool("older isn't newer", PrompterModel.isNewer("1.2.0", than: "1.3.0"), false)
+    // string comparison would call 1.10 older than 1.9 — it must not
+    expectBool("double-digit minor", PrompterModel.isNewer("1.10.0", than: "1.9.0"), true)
+    expectBool("double-digit patch", PrompterModel.isNewer("1.3.10", than: "1.3.9"), true)
+    // GitHub tags carry a leading v; the bundle version doesn't
+    expectBool("v prefix tolerated", PrompterModel.isNewer("v1.4.0", than: "1.3.0"), true)
+    expectBool("v prefix same version", PrompterModel.isNewer("v1.3.0", than: "1.3.0"), false)
+    // a missing patch level means zero, not "older"
+    expectBool("short form equals long", PrompterModel.isNewer("1.3", than: "1.3.0"), false)
+    expectBool("short form still compares", PrompterModel.isNewer("1.4", than: "1.3.9"), true)
+    expectBool("longer form beats short", PrompterModel.isNewer("1.3.1", than: "1.3"), true)
+    // the old bundle version that shipped as "1.0" must see every release
+    expectBool("legacy 1.0 sees 1.3.0", PrompterModel.isNewer("v1.3.0", than: "1.0"), true)
+    // garbage must never claim to be newer
+    expectBool("empty tag isn't newer", PrompterModel.isNewer("", than: "1.3.0"), false)
+    expectBool("junk tag isn't newer", PrompterModel.isNewer("banana", than: "1.3.0"), false)
+    expectBool("suffixed tag compares on numbers",
+               PrompterModel.isNewer("1.4.0-beta", than: "1.3.0"), true)
 
     // ── manual scroll override ──
     m.script = PrompterModel.sample
