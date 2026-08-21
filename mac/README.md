@@ -7,7 +7,7 @@ Advantages over the web version:
 - **Real transparency** — opacity slider makes the note as see-through as you like; text stays crisp
 - **Always on top of everything**, including full-screen apps and all Spaces
 - **Invisible in screen shares & recordings** by default (`NSWindow.sharingType = .none`) — toggle from the menu bar icon
-- **On-device / Apple speech recognition** — nothing leaves your Mac beyond Apple's recognizer
+- **Apple speech recognition** — the same recognizer system dictation uses, biased toward your script's own vocabulary for better accuracy on names and jargon
 - **Click-through mode** — the note ignores your mouse entirely (toggle from the 📝 menu bar icon)
 
 ## Install

@@ -31,7 +31,7 @@ It listens as you speak and follows along with your script — no scrolling, no 
 - <img src="docs/icons/palette.svg" width="16" height="16" alt=""> **Any background color + transparency slider** — text auto-adjusts for readability.
 - <img src="docs/icons/library.svg" width="16" height="16" alt=""> **Edit and live modes** — type your script directly on the note, then go live: every button disappears and only your words remain. Double-click to edit again.
 - <img src="docs/icons/library.svg" width="16" height="16" alt=""> **Script library** — save scripts as plain text files, open `.txt`/`.md`/`.docx`, reload anytime.
-- <img src="docs/icons/lock.svg" width="16" height="16" alt=""> **Private** — everything runs locally; speech recognition is Apple's (macOS) or the browser's (web). No accounts, no telemetry, no server.
+- <img src="docs/icons/lock.svg" width="16" height="16" alt=""> **Private** — no accounts, no telemetry, no server of ours. Your scripts stay on your machine as plain text files. Speech recognition is the system's: Apple's on macOS, the browser's on web, which means audio may go to their servers the same way system dictation does.
 
 ## Install
 

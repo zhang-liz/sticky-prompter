@@ -25,6 +25,6 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Sticky Prompter listens to your voice to follow along with your script.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Sticky Prompter transcribes your speech on-device to track your position in the script.</string>
+	<string>Sticky Prompter uses Apple's speech recognition to track your position in the script.</string>
 </dict>
 </plist>
