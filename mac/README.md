@@ -61,7 +61,7 @@ The library (**File ▸ Scripts Library…**, `⌘L`) has a saved-scripts sideba
 
 Scripts are plain text. Two conventions:
 
-- `# A heading` starts a section, shown bigger and bold
+- `# A heading` starts a section, shown bigger and bold (the space matters, so `#1 rule` stays a line you read out)
 - `[anything in brackets]` is a stage direction: `[pause]`, `[smile]`, `[look at the camera]`. It shows on the note but is never expected to be spoken, so the highlight steps over it and it never biases the recognizer
 
 ## How the tracking works

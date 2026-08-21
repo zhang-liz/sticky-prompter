@@ -106,7 +106,7 @@ Open **http://localhost:4173** in Chrome.
 
 Scripts are plain text, so two conventions are all there is:
 
-- `# A heading` starts a section, shown bigger and bold
+- `# A heading` starts a section, shown bigger and bold (the space matters, so `#1 rule` stays a line you read out)
 - `[anything in brackets]` is a stage direction: `[pause]`, `[smile]`, `[look at the camera]`. It shows on the note but is never expected to be spoken, so the highlight steps over it
 
 ## How the voice tracking works
