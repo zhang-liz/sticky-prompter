@@ -1276,7 +1276,9 @@ struct ContentView: View {
     // as close to the camera as possible
     var scriptView: some View {
         GeometryReader { geo in
-            let width = geo.size.width
+            // the text sits inside 16pt of padding each side; a first layout
+            // pass can report 0, so never hand the rows a negative width
+            let columnW = max(1, (geo.size.width - 32) * m.columnWidth)
             ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
@@ -1298,6 +1300,10 @@ struct ContentView: View {
                                     .onTapGesture { m.jump(to: i) }   // click a word = read from here
                             }
                         }
+                        // the row is what wraps, so the column limit has to land
+                        // here — constraining the VStack outside would leave
+                        // WrapWords proposing the full width and nothing changes
+                        .frame(width: columnW, alignment: .leading)
                         .padding(.top, r.newPara ? m.fontSize * 0.55 : 0)
                         .id(r.id)
                     }
@@ -1305,10 +1311,6 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
-                // a narrower column keeps the eyes from travelling sideways,
-                // which is what makes reading look like talking
-                .frame(maxWidth: m.columnWidth >= 0.99 ? .infinity : width * m.columnWidth,
-                       alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .contentShape(Rectangle())
