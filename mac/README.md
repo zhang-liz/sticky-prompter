@@ -42,6 +42,7 @@ The script library lives in **File ▸ Scripts Library…** (`⌘L`).
 **Live mode**: all buttons disappear — just your script and a thin progress bar. The current sentence pins to the top edge, right under your camera. Controls are the keyboard and the menu-bar icon:
 
 - `space` mic on/off · `←`/`→` nudge a word · `↑`/`↓` jump ~a line · `R` restart
+- **click any word** to read from there — the fastest way back in sync after a detour
 - **double-click the text** (or press `E`) to go back to edit mode
 
 Drag the note anywhere by its background. Resize from any edge. Position, script, colors, and all toggles persist across launches. Closing the note hides it — bring it back from the menu-bar icon or by reopening the app; quit from the menu-bar icon.
@@ -51,6 +52,15 @@ Drag the note anywhere by its background. Resize from any edge. Position, script
 ## Script library
 
 The library (**File ▸ Scripts Library…**, `⌘L`) has a saved-scripts sidebar. Give a script a name and hit **Save to library**; click any saved name to load it; the trash icon moves it to the Trash. Scripts are plain `.txt` files in `~/Library/Application Support/Sticky Prompter/Scripts/`, so you can also drop files there yourself or edit them in any text editor. The note's footer shows the name of the loaded script.
+
+`⌘S` saves the note back to wherever it came from. To keep that script and start another, use **Save Script As…** (`⇧⌘S`) for a copy under a new name, or **New Script** (`⌘N`) for a blank note with no save target, so the next `⌘S` asks for a name instead of rewriting the last one.
+
+## Writing a script
+
+Scripts are plain text. Two conventions:
+
+- `# A heading` starts a section, shown bigger and bold
+- `[anything in brackets]` is a stage direction: `[pause]`, `[smile]`, `[look at the camera]`. It shows on the note but is never expected to be spoken, so the highlight steps over it and it never biases the recognizer
 
 ## How the tracking works
 

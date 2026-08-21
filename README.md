@@ -96,7 +96,17 @@ Open **http://localhost:4173** in Chrome.
 | <kbd>↑</kbd> / <kbd>↓</kbd> | jump about a line |
 | <kbd>R</kbd> | restart from the top |
 | <kbd>E</kbd> or double-click | back to edit mode |
+| click any word | read from there |
 | <kbd>⌘S</kbd> | save the script |
+| <kbd>⇧⌘S</kbd> | save a copy under a new name |
+| <kbd>⌘N</kbd> | start a blank script |
+
+## Writing a script
+
+Scripts are plain text, so two conventions are all there is:
+
+- `# A heading` starts a section, shown bigger and bold
+- `[anything in brackets]` is a stage direction: `[pause]`, `[smile]`, `[look at the camera]`. It shows on the note but is never expected to be spoken, so the highlight steps over it
 
 ## How the voice tracking works
 
