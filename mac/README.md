@@ -8,7 +8,7 @@ Advantages over the web version:
 - **Always on top of everything**, including full-screen apps and all Spaces
 - **Invisible in screen shares & recordings** by default (`NSWindow.sharingType = .none`) — toggle from the menu bar icon
 - **Apple speech recognition** — the same recognizer system dictation uses, biased toward your script's own vocabulary for better accuracy on names and jargon
-- **Click-through mode** — the note ignores your mouse entirely (toggle from the 📝 menu bar icon)
+- **Click-through mode** — the note ignores your mouse entirely (toggle from the <img src="../docs/icons/sticky-note.svg" width="15" height="15" alt=""> menu bar icon)
 
 ## Install
 
@@ -33,8 +33,11 @@ Requires Xcode Command Line Tools (`xcode-select --install` if missing). The bui
 | A- / A+ | text size |
 | color swatch | background color (text auto-adjusts light/dark for readability) |
 | slider | background transparency |
-| 📚 | script library — save, load, delete named scripts |
-| ▶ Go Live | switch to live mode (or press `Esc`) |
+| <img src="../docs/icons/save.svg" width="15" height="15" alt=""> | save the script (`⌘S`) |
+| <img src="../docs/icons/folder-open.svg" width="15" height="15" alt=""> | open a file as the script (`⌘O`) |
+| <img src="../docs/icons/play.svg" width="15" height="15" alt=""> Go Live | switch to live mode (or press `Esc`) |
+
+The script library lives in **File ▸ Scripts Library…** (`⌘L`).
 
 **Live mode**: all buttons disappear — just your script and a thin progress bar. The current sentence pins to the top edge, right under your camera. Controls are the keyboard and the menu-bar icon:
 
@@ -43,11 +46,11 @@ Requires Xcode Command Line Tools (`xcode-select --install` if missing). The bui
 
 Drag the note anywhere by its background. Resize from any edge. Position, script, colors, and all toggles persist across launches. Closing the note hides it — bring it back from the menu-bar icon or by reopening the app; quit from the menu-bar icon.
 
-**Menu bar icon (📝):** edit/live toggle, voice tracking, restart, click-through mode, hide/show from screen recordings, re-show the note, quit.
+**Menu bar icon** (<img src="../docs/icons/sticky-note.svg" width="15" height="15" alt="">)**:** edit/live toggle, voice tracking, restart, click-through mode, hide/show from screen recordings, re-show the note, quit.
 
 ## Script library
 
-The 📚 library has a saved-scripts sidebar. Give a script a name and hit **Save to library**; click any saved name to load it; the trash icon moves it to the Trash. Scripts are plain `.txt` files in `~/Library/Application Support/Sticky Prompter/Scripts/`, so you can also drop files there yourself or edit them in any text editor. The note's footer shows the name of the loaded script.
+The library (**File ▸ Scripts Library…**, `⌘L`) has a saved-scripts sidebar. Give a script a name and hit **Save to library**; click any saved name to load it; the trash icon moves it to the Trash. Scripts are plain `.txt` files in `~/Library/Application Support/Sticky Prompter/Scripts/`, so you can also drop files there yourself or edit them in any text editor. The note's footer shows the name of the loaded script.
 
 ## How the tracking works
 

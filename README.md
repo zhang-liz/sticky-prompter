@@ -16,9 +16,9 @@ It listens as you speak and follows along with your script — no scrolling, no 
 </p>
 
 <p align="center">
-  <a href="https://github.com/zhang-liz/sticky-prompter/releases/latest/download/StickyPrompter.dmg"><b>⬇️&nbsp; Download for macOS</b></a>
+  <a href="https://github.com/zhang-liz/sticky-prompter/releases/latest/download/StickyPrompter.dmg"><img src="docs/icons/download.svg" width="15" height="15" alt=""> <b>Download for macOS</b></a>
   &nbsp;·&nbsp;
-  <a href="https://zhang-liz.github.io/sticky-prompter/"><b>▶️&nbsp; Try it in your browser</b></a>
+  <a href="https://zhang-liz.github.io/sticky-prompter/"><img src="docs/icons/circle-play.svg" width="15" height="15" alt=""> <b>Try it in your browser</b></a>
 </p>
 
 ---
