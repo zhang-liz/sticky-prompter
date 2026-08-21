@@ -1329,6 +1329,10 @@ struct ContentView: View {
 
     // edit mode: type straight into the note
     var editor: some View {
+        GeometryReader { geo in
+        // same column as live mode, so the line breaks you set while typing are
+        // the ones you'll read off the note
+        let columnW = max(1, (geo.size.width - 24) * m.columnWidth)
         ZStack {
             if m.script.isEmpty {
                 VStack(spacing: 10) {
@@ -1347,9 +1351,12 @@ struct ContentView: View {
                 .font(.system(size: m.fontSize, weight: .medium, design: .rounded))
                 .foregroundColor(mainColor)
                 .modifier(ClearTextEditor())
+                .frame(width: columnW)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .onExitCommand { m.goLive() }   // Esc commits and goes live
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
         }
     }
 
