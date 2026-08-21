@@ -76,7 +76,14 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var script: String
     @Published var scriptName: String
     @Published var savedNames: [String] = []
-    @Published var pos = 0
+    @Published var pos = 0 {
+        didSet {
+            guard pos != oldValue else { return }
+            // tracking only gets to drive the scroll while the reader isn't
+            // steering it themselves; a manual scroll buys a few seconds of quiet
+            if !scrollHeldByUser { scrollTarget &+= 1 }
+        }
+    }
     @Published var fontSize: Double
     @Published var bgOpacity: Double
     @Published var bgR: Double
@@ -91,6 +98,16 @@ final class PrompterModel: NSObject, ObservableObject {
     @Published var autoScroll = false      // steady pace instead of voice tracking
     @Published var autoPaused = false
     @Published var wpm: Double = 140       // auto-scroll speed, words per minute
+    // Fraction of the note's width the text may fill. Short lines are the
+    // standard trick for reading without looking like you're reading: the eyes
+    // barely travel sideways, so they stay near the lens.
+    @Published var columnWidth: Double = 1.0
+    // Bumped whenever the view should scroll to the current row. Tracking
+    // advances `pos` constantly; this is the subset of those moves the view is
+    // allowed to follow, so a manual scroll can hold it off for a moment.
+    @Published var scrollTarget = 0
+    private var scrollHeldByUser = false
+    private var scrollHoldTimer: Timer?
     @Published var recentFiles: [URL] = []
     @Published var libraryDir: URL = PrompterModel.defaultScriptsDir
     @Published var sourceURL: URL?   // external file the script came from; saves write back to it
@@ -140,6 +157,7 @@ final class PrompterModel: NSObject, ObservableObject {
         captureHidden = d.object(forKey: "captureHidden") as? Bool ?? true
         autoScroll = d.bool(forKey: "autoScroll")
         wpm = d.object(forKey: "wpm") as? Double ?? 140
+        columnWidth = d.object(forKey: "columnWidth") as? Double ?? 1.0
         recentFiles = (d.array(forKey: "recentFiles") as? [String] ?? [])
             .map { URL(fileURLWithPath: $0) }
         if let path = d.string(forKey: "libraryDir") {
@@ -251,6 +269,7 @@ final class PrompterModel: NSObject, ObservableObject {
         d.set(captureHidden, forKey: "captureHidden")
         d.set(autoScroll, forKey: "autoScroll")
         d.set(wpm, forKey: "wpm")
+        d.set(columnWidth, forKey: "columnWidth")
         d.set(recentFiles.map { $0.path }, forKey: "recentFiles")
         d.set(libraryDir.path, forKey: "libraryDir")
         if let u = sourceURL { d.set(u.path, forKey: "sourceURL") }
@@ -954,6 +973,7 @@ final class PrompterModel: NSObject, ObservableObject {
         sessionGen += 1
         if listening { stopListening() }
         stopAutoScroll()
+        releaseScrollHold()
         live = false
     }
 
@@ -1020,8 +1040,32 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
+    /// The reader grabbed the scroll — maybe to re-read a line. Stop yanking the
+    /// view back under them, and pick tracking back up a few seconds later so
+    /// they don't have to do anything to resume.
+    func holdScrollForUser(_ seconds: TimeInterval = 3) {
+        guard live else { return }
+        scrollHeldByUser = true
+        scrollHoldTimer?.invalidate()
+        scrollHoldTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.scrollHeldByUser = false
+            self.scrollTarget &+= 1   // catch up to wherever the voice got to
+        }
+    }
+
+    /// Deliberate moves (a click, an arrow key, restart) always win over a hold:
+    /// the reader is telling us where to be, not asking to be left alone.
+    private func releaseScrollHold() {
+        scrollHoldTimer?.invalidate()
+        scrollHoldTimer = nil
+        scrollHeldByUser = false
+    }
+
     func jump(to i: Int) {
+        releaseScrollHold()
         pos = max(0, min(i, tokens.count))
+        scrollTarget &+= 1   // jumping to the current row still has to scroll
         anchor = pos
         pending = []
         if listening { restartRecognition() } // drop the in-flight utterance
@@ -1224,7 +1268,9 @@ struct ContentView: View {
     // live mode: the sentence being read sits at the very top,
     // as close to the camera as possible
     var scriptView: some View {
-        ScrollViewReader { proxy in
+        GeometryReader { geo in
+            let width = geo.size.width
+            ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: m.fontSize * 0.3) {
                     ForEach(m.rows) { r in
@@ -1252,14 +1298,22 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
+                // a narrower column keeps the eyes from travelling sideways,
+                // which is what makes reading look like talking
+                .frame(maxWidth: m.columnWidth >= 0.99 ? .infinity : width * m.columnWidth,
+                       alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { m.enterEdit() }
-            .onChange(of: m.pos) { _ in
-                withAnimation(.easeOut(duration: 0.25)) {
+            .onChange(of: m.scrollTarget) { _ in
+                // a spring rather than easeOut: successive words land while the
+                // previous glide is still running, and a spring blends them into
+                // one continuous motion instead of restarting the ease each time
+                withAnimation(.interpolatingSpring(stiffness: 90, damping: 18)) {
                     proxy.scrollTo(m.currentRowID, anchor: UnitPoint(x: 0, y: 0.02))
                 }
+            }
             }
         }
     }
@@ -1329,6 +1383,16 @@ struct ContentView: View {
                     .frame(width: 64)
             }
             .help("Note transparency — drag left to see through the note (\(Int(m.bgOpacity * 100))%)")
+            HStack(spacing: 4) {
+                Image(systemName: "text.alignleft")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.primary.opacity(0.55))
+                Slider(value: Binding(get: { m.columnWidth }, set: { m.columnWidth = $0; m.persist() }),
+                       in: 0.35...1)
+                    .controlSize(.mini)
+                    .frame(width: 52)
+            }
+            .help("Text column width in live mode — narrower lines keep your eyes near the lens (\(Int(m.columnWidth * 100))%)")
             Divider().frame(height: 14).opacity(0.4)
             ctl(m.autoScroll ? "timer" : "mic",
                 help: m.autoScroll ? "Auto-scroll at a steady pace — click to switch to voice tracking"
@@ -2141,6 +2205,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     func setupKeys() {
+        // scrolling the live note by hand means "leave it where I put it" —
+        // otherwise the next tracked word snaps the view back mid-read
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] ev in
+            guard let self = self, ev.window === self.panel, self.model.live else { return ev }
+            self.model.holdScrollForUser()
+            return ev
+        }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             guard let self = self, !self.model.editing else { return ev }
             // only shortcuts aimed at the note itself (not the color panel etc.)
@@ -2654,6 +2725,36 @@ func runSelfTest() {
     m.deleteScript("Talk")
     m.detach()
     m.script = ""
+
+    // ── manual scroll override ──
+    m.script = PrompterModel.sample
+    m.rebuild()
+    m.goLive()
+    // tracking drives the scroll while nobody's touching it
+    let beforeTrack = m.scrollTarget
+    m.handleTranscript(["hey", "everyone"], isFinal: false)
+    expectBool("tracking moves the scroll", m.scrollTarget > beforeTrack, true)
+    // once the reader scrolls by hand, tracking stops yanking the view back
+    m.holdScrollForUser(60)
+    let held = m.scrollTarget
+    m.handleTranscript(["hey", "everyone", "welcome"], isFinal: false)
+    expectBool("held scroll ignores tracking", m.scrollTarget == held, true)
+    // but a deliberate move still wins — the reader is saying where to be
+    m.jump(to: 3)
+    expectBool("jump overrides the hold", m.scrollTarget > held, true)
+    let afterJump = m.scrollTarget
+    m.handleTranscript(["hey", "everyone", "welcome", "back"], isFinal: false)
+    expectBool("jump resumes tracking", m.scrollTarget > afterJump, true)
+    // leaving live mode drops the hold with it
+    m.holdScrollForUser(60)
+    m.enterEdit()
+    let afterEdit = m.scrollTarget
+    m.goLive()
+    m.handleTranscript(["hey"], isFinal: false)
+    expectBool("edit mode clears the hold", m.scrollTarget > afterEdit, true)
+    m.enterEdit()
+    m.script = ""
+    m.rebuild()
 
     // failed saves report failure
     let lockedDir = tmp.appendingPathComponent("locked", isDirectory: true)
