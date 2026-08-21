@@ -290,6 +290,24 @@ final class PrompterModel: NSObject, ObservableObject {
         savedURLs[name] ?? savedURLs.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
+    /// "Talk" → "Talk 2" when Talk.txt already exists. Save As offers this so
+    /// Return duplicates the script instead of replacing it. Case-insensitive
+    /// to match savedURL and saveScript — the default filesystem is.
+    func uniqueLibraryName(_ base: String) -> String {
+        let trimmed = base.trimmingCharacters(in: .whitespaces)
+        func taken(_ n: String) -> Bool {
+            savedNames.contains { $0.caseInsensitiveCompare(n) == .orderedSame }
+        }
+        // suffix the name as it's spelled on disk, so duplicating "Talk" from a
+        // note holding "talk" still offers "Talk 2"
+        let onDisk = savedNames.first { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+        let stem = trimmed.isEmpty ? "Script" : (onDisk ?? trimmed)
+        guard taken(stem) else { return stem }
+        var i = 2
+        while taken("\(stem) \(i)") { i += 1 }
+        return "\(stem) \(i)"
+    }
+
     func refreshSavedNames() {
         // .TXT counts too; folders named *.txt don't (a first-key collision on
         // a case-sensitive volume keeps one entry rather than crashing)
@@ -541,13 +559,18 @@ final class PrompterModel: NSObject, ObservableObject {
     }
 
     /// Modal "name your script" prompt. Nil when cancelled or left blank.
-    private func promptScriptName() -> String? {
+    /// The defaults keep ⌘S's call site unchanged; Save As passes its own
+    /// wording and seeds the field with a name that won't collide.
+    private func promptScriptName(title: String = "Name your script",
+                                  info: String = "It's saved in the library as a .txt file.",
+                                  prefill: String = "") -> String? {
         guard alertsEnabled else { return nil }
         let a = NSAlert()
-        a.messageText = "Name your script"
-        a.informativeText = "It's saved in the library as a .txt file."
+        a.messageText = title
+        a.informativeText = info
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 230, height: 24))
         field.placeholderString = "Script name"
+        field.stringValue = prefill
         a.accessoryView = field
         a.addButton(withTitle: "Save")
         a.addButton(withTitle: "Cancel")
@@ -611,6 +634,57 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
+    /// Save the current text under a NEW library name, leaving whatever it was
+    /// attached to untouched on disk. Detaching is the point: without it the
+    /// `if let u = sourceURL` at the top of saveCurrentScript keeps winning and
+    /// the new name would never be used again.
+    /// Identity doesn't move until the write succeeds, so Cancel and a failed
+    /// write both leave the old save target exactly as it was.
+    func saveScriptAs() {
+        guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            flash("Nothing to save yet")
+            return
+        }
+        if live { enterEdit() }   // stop the mic before a modal prompt
+        refreshSavedNames()       // Finder may have added files since launch
+        let current = scriptName.trimmingCharacters(in: .whitespaces)
+        let from = sourceURL?.lastPathComponent ?? (current.isEmpty ? nil : current)
+        let info = from.map {
+            "Saved as a new .txt in the library. “\($0)” keeps its current contents, and ⌘S saves to the new name from now on."
+        } ?? "It's saved in the library as a .txt file."
+        let stem = current.isEmpty
+            ? (sourceURL?.deletingPathExtension().lastPathComponent ?? "")
+            : current
+        guard let newName = promptScriptName(title: "Save script as",
+                                             info: info,
+                                             prefill: uniqueLibraryName(stem)) else { return }
+        // the suggested name never collides, but a typed one still can
+        if savedNames.contains(where: { $0.caseInsensitiveCompare(newName) == .orderedSame }),
+           !confirmReplaceLibraryScript(newName) { return }
+        guard saveScript(newName, text: script) else {
+            flash("⚠️ Couldn't save “\(newName)” — check the library folder")
+            return   // identity untouched: ⌘S still targets the old file
+        }
+        // only now is it safe to move. Name and baseline go together, or
+        // ownsLibraryScript lies and the next save sees a phantom external edit.
+        detach()
+        scriptName = newName
+        libraryBaseline = script
+        persist()
+        flash("Saved “\(newName)”")
+    }
+
+    /// Start a blank script with no save target — the next ⌘S asks for a name
+    /// instead of rewriting whatever was open before.
+    func newScript() {
+        if live { enterEdit() }   // never raise a modal over a live prompter
+        guard confirmReplaceNote() else { return }   // headless: counts as cancel
+        script = ""
+        detach()
+        rebuild()   // rebuild() persists, so detach() has to come first
+        flash("New script")
+    }
+
     /// The Scripts sheet's copy of the never-clobber rule: a library .txt
     /// edited outside the app since the draft was loaded isn't silently
     /// overwritten. `snapshot` covers a draft loaded from a library row;
@@ -665,6 +739,22 @@ final class PrompterModel: NSObject, ObservableObject {
         scriptName = ""
         libraryBaseline = nil
         persist()
+    }
+
+    /// Cut every tie between the note and a save target. These five vars are
+    /// exactly what saveCurrentScript and goLive consult to pick a file, so
+    /// they only make sense cleared together: a leftover sourceURL keeps
+    /// routing saves to the old file, and a leftover scriptName quietly
+    /// rewrites the old library entry.
+    /// Deliberately not shared with detachIfOwnsScript, which must leave
+    /// sourceURL alone — trashing a library file says nothing about an open
+    /// source file. Leaves `script` alone: New clears the text, Save As keeps it.
+    func detach() {
+        sourceURL = nil
+        sourceBaseline = nil
+        libraryBaseline = nil
+        scriptName = ""
+        wordSaveApproved = false   // a new target re-asks before flattening a Word doc
     }
 
     /// The Scripts sheet may skip the Replace prompt only for a draft the note
@@ -1247,7 +1337,8 @@ struct ContentView: View {
                 m.persist()
             }
             HStack(spacing: 1) {
-                ctl("square.and.arrow.down", help: "Save script (⌘S)") { m.saveCurrentScript() }
+                ctl("square.and.pencil", help: "New script (⌘N) — clears the note and its save target") { m.newScript() }
+                ctl("square.and.arrow.down", help: "Save script (⌘S) — ⇧⌘S saves a copy under a new name") { m.saveCurrentScript() }
                 ctl("folder", help: "Open a file as the script (⌘O) — library lives in File ▸ Scripts (⌘L)") { m.openScriptFile() }
                 Menu {
                     if m.recentFiles.isEmpty {
@@ -1816,6 +1907,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         let fileItem = NSMenuItem(); main.addItem(fileItem)
         let file = NSMenu(title: "File")
+        let newItem = NSMenuItem(title: "New Script", action: #selector(newFromMenu), keyEquivalent: "n")
+        newItem.target = self
+        file.addItem(newItem)
+        file.addItem(.separator())
         let openItem = NSMenuItem(title: "Open Script File…", action: #selector(openFromMenu), keyEquivalent: "o")
         openItem.target = self
         file.addItem(openItem)
@@ -1826,6 +1921,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let saveItem = NSMenuItem(title: "Save Script", action: #selector(saveFromMenu), keyEquivalent: "s")
         saveItem.target = self
         file.addItem(saveItem)
+        let saveAsItem = NSMenuItem(title: "Save Script As…", action: #selector(saveAsFromMenu), keyEquivalent: "s")
+        saveAsItem.keyEquivalentModifierMask = [.command, .shift]
+        saveAsItem.target = self
+        file.addItem(saveAsItem)
         file.addItem(.separator())
         let libItem = NSMenuItem(title: "Scripts Library…", action: #selector(libraryFromMenu), keyEquivalent: "l")
         libItem.target = self
@@ -1854,6 +1953,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func saveFromMenu() {
         guard !model.editing else { return }
         model.saveCurrentScript()
+    }
+    @objc func newFromMenu() {
+        guard !model.editing else { return }
+        model.newScript()
+    }
+    @objc func saveAsFromMenu() {
+        guard !model.editing else { return }
+        model.saveScriptAs()
     }
     @objc func libraryFromMenu() {
         guard !model.editing else { return }
@@ -1893,6 +2000,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(openFromMenu) || menuItem.action == #selector(saveFromMenu)
+            || menuItem.action == #selector(newFromMenu) || menuItem.action == #selector(saveAsFromMenu)
             || menuItem.action == #selector(toggleMode) || menuItem.action == #selector(toggleMicFromMenu)
             || menuItem.action == #selector(restartFromMenu) || menuItem.action == #selector(libraryFromMenu)
             || menuItem.action == #selector(openRecentFromMenu(_:)) {
@@ -2041,10 +2149,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.model.live ? self.model.enterEdit() : self.model.goLive()
                 return nil
             }
-            // ⌘S saves the current script, even while typing
+            // ⌘S saves the current script, even while typing; ⇧⌘S saves a copy
+            // under a new name instead of rewriting this one. Both live here
+            // rather than on the menu item alone: the NSTextView early-return
+            // below would leave a menu-only binding dead whenever the editor
+            // has focus, which is exactly when you reach for Save As.
             if ev.modifierFlags.contains(.command),
                ev.charactersIgnoringModifiers?.lowercased() == "s" {
-                self.model.saveCurrentScript()
+                if ev.modifierFlags.contains(.shift) {
+                    self.model.saveScriptAs()
+                } else {
+                    self.model.saveCurrentScript()
+                }
+                return nil
+            }
+            // ⌘N starts a blank script with no save target. Above the
+            // early-return too, so it reaches the note while typing — which
+            // means ⌘N is reserved inside the editor.
+            if ev.modifierFlags.contains(.command),
+               ev.charactersIgnoringModifiers?.lowercased() == "n" {
+                self.model.newScript()
                 return nil
             }
             if let fr = self.panel.firstResponder, fr is NSTextView { return ev }
@@ -2432,6 +2556,103 @@ func runSelfTest() {
     expectBool("sheet save of a fresh name allowed",
                m.confirmSheetOverwrite("Brand New", draft: "x", snapshot: ""), true)
     m.deleteScript("Sheet")
+
+    // ── New Script / Save As ──
+    // detach() clears every var that picks a save target — one left behind and
+    // the next ⌘S rewrites the old file
+    m.sourceURL = shared
+    m.sourceBaseline = "mine"
+    m.scriptName = "Talk"
+    m.libraryBaseline = "talk body"
+    m.wordSaveApproved = true
+    m.script = "body text"
+    m.detach()
+    expectBool("detach clears every save target",
+               m.sourceURL == nil && m.sourceBaseline == nil && m.libraryBaseline == nil
+                   && m.scriptName.isEmpty && !m.wordSaveApproved, true)
+    expectBool("detach keeps the text", m.script == "body text", true)
+    // the suggested name never collides, so Return duplicates instead of replacing
+    m.saveScript("Talk", text: "talk v1")
+    expectBool("unique name suffixes a collision", m.uniqueLibraryName("Talk") == "Talk 2", true)
+    m.saveScript("Talk 2", text: "dup")
+    expectBool("unique name walks past every collision", m.uniqueLibraryName("talk") == "Talk 3", true)
+    expectBool("unique name leaves a free name alone", m.uniqueLibraryName("Fresh") == "Fresh", true)
+    expectBool("unique name falls back for a blank", m.uniqueLibraryName("  ") == "Script", true)
+    m.deleteScript("Talk 2")
+    // Save As is cancel-safe: headless prompt = Cancel, so nothing is written
+    // and the note still points at what it did before
+    m.scriptName = "Talk"
+    m.libraryBaseline = "talk v1"
+    m.script = "talk v2"
+    let asNames = m.savedNames
+    m.saveScriptAs()
+    expectBool("cancelled save-as writes nothing",
+               m.loadScript("Talk") == "talk v1" && m.savedNames == asNames, true)
+    expectBool("cancelled save-as keeps the original target",
+               m.scriptName == "Talk" && m.libraryBaseline == "talk v1", true)
+    // a cancelled Save As must not detach a source file either, or ⌘S quietly
+    // stops updating the file the user opened
+    m.scriptName = ""
+    m.libraryBaseline = nil
+    m.sourceURL = shared
+    m.sourceBaseline = "mine"
+    m.script = "src v2"
+    m.saveScriptAs()
+    expectBool("cancelled save-as keeps the source target",
+               m.sourceURL == shared && m.sourceBaseline == "mine", true)
+    m.detach()
+    // an empty note has nothing to duplicate
+    m.script = "   "
+    m.scriptName = "Talk"
+    m.saveScriptAs()
+    expectBool("empty save-as does nothing", m.savedNames == asNames && m.scriptName == "Talk", true)
+    // Save As while live drops out of live first — the mic must never be hot
+    // behind a modal
+    m.script = "live save-as body"
+    m.goLive()
+    m.saveScriptAs()
+    expectBool("live save-as leaves live mode", m.live, false)
+    // New must not discard unsaved edits without consent (headless = cancel)
+    m.detach()
+    m.script = "typed but never saved"
+    m.newScript()
+    expectBool("headless new keeps unsaved edits", m.script == "typed but never saved", true)
+    m.goLive()
+    m.newScript()
+    expectBool("live new leaves live mode", m.live, false)
+    // a note matching its library file has nothing at risk, so New goes through
+    m.detach()
+    m.scriptName = "Talk"
+    m.libraryBaseline = "talk v1"
+    m.script = "talk v1"
+    m.newScript()
+    expectBool("new clears a saved note",
+               m.script.isEmpty && m.scriptName.isEmpty && m.libraryBaseline == nil, true)
+    expectBool("new leaves the original file alone", m.loadScript("Talk") == "talk v1", true)
+    expectBool("detached note owns nothing", m.ownsLibraryScript, false)
+    // the whole point: after New, saving asks for a name instead of rewriting,
+    // and goLive stops silently writing the old file
+    m.script = "a brand new script"
+    let afterNew = m.savedNames
+    m.saveCurrentScript()   // headless: name prompt = cancel
+    expectBool("save after new prompts instead of rewriting",
+               m.savedNames == afterNew && m.loadScript("Talk") == "talk v1", true)
+    m.goLive()
+    expectBool("goLive after new writes nothing", m.loadScript("Talk") == "talk v1", true)
+    m.enterEdit()
+    // New also stops saves going back to an opened source file
+    m.detach()
+    m.script = "src body"
+    m.scriptName = "shared"
+    m.sourceURL = shared
+    m.sourceBaseline = "src body"
+    m.newScript()
+    expectBool("new detaches the source file",
+               m.sourceURL == nil && m.sourceBaseline == nil, true)
+    m.deleteScript("Talk")
+    m.detach()
+    m.script = ""
+
     // failed saves report failure
     let lockedDir = tmp.appendingPathComponent("locked", isDirectory: true)
     try? FileManager.default.createDirectory(at: lockedDir, withIntermediateDirectories: true)
