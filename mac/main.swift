@@ -8,8 +8,12 @@ import UniformTypeIdentifiers
 // MARK: - Text utilities
 
 func normWord(_ s: String) -> String {
+    // fold diacritics first: the recognizer transcribes "José" as "jose", so a
+    // script keeping the accent would never match and the tracker would stall
     var out = ""
-    for sc in s.lowercased().unicodeScalars {
+    let folded = s.folding(options: [.diacriticInsensitive, .caseInsensitive],
+                           locale: Locale(identifier: "en_US"))
+    for sc in folded.unicodeScalars {
         if sc == "\u{2019}" { out.unicodeScalars.append("'") }   // curly → straight apostrophe
         else if CharacterSet.alphanumerics.contains(sc) || sc == "'" { out.unicodeScalars.append(sc) }
     }
@@ -915,7 +919,10 @@ final class PrompterModel: NSObject, ObservableObject {
         if autoScroll { rescheduleAutoTimer() } // new row, new line timing
     }
 
-    func nudge(_ delta: Int) { jump(to: pos + delta) }
+    func nudge(_ delta: Int) {
+        let (sum, overflow) = pos.addingReportingOverflow(delta)
+        jump(to: overflow ? (delta > 0 ? Int.max : Int.min) : sum)
+    }
     func restartFromTop() { jump(to: 0) }
 
     // MARK: speech
