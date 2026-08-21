@@ -794,9 +794,12 @@ final class PrompterModel: NSObject, ObservableObject {
             var line = rawLine
             var heading = false
             // a leading # marks a section in any script, not just a .md file:
-            // scripts typed straight onto the note have no source file at all
+            // scripts typed straight onto the note have no source file at all.
+            // Outside markdown it must be "# Heading", never "#hashtag" or
+            // "#1 rule", which are words someone is going to say out loud
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("#") {
+            if trimmed.hasPrefix("#"),
+               md || trimmed.drop(while: { $0 == "#" }).first == " " {
                 heading = true
                 line = String(trimmed.drop(while: { $0 == "#" }))
             }
@@ -1031,6 +1034,9 @@ final class PrompterModel: NSObject, ObservableObject {
         pos = anchor
         pending = []
         for w in words { consume(w) }
+        // consume() only steps over unspoken tokens on its way to a match, so a
+        // script ending in a stage direction would stall one short of the end
+        while pos < tokens.count, tokens[pos].norm.isEmpty { pos += 1 }
         if isFinal { anchor = pos }
         if pos >= tokens.count && !tokens.isEmpty {
             if !announcedEnd { announcedEnd = true; flash("🎉 End of script") }
@@ -1217,6 +1223,7 @@ final class PrompterModel: NSObject, ObservableObject {
     func stopListening() {
         listening = false
         sessionGen += 1   // strand any permission callback still in flight
+        releaseScrollHold()   // mic off then on shouldn't stay frozen mid-hold
         maxDurationTimer?.invalidate()
         maxDurationTimer = nil
         silenceTimer?.invalidate()
@@ -2350,6 +2357,10 @@ func runSelfTest() {
     m.script = "Speak now [teleprompter]"
     m.rebuild()
     expectBool("direction stays out of vocab", m.vocab.contains("teleprompter"), false)
+    // a script ending in a direction still has to reach the end, or the
+    // progress bar and the end-of-script flash never arrive
+    m.handleTranscript(["speak", "now"], isFinal: true)
+    expect("trailing direction reaches the end", m.pos, m.tokens.count)
 
     // sections: a leading # is a heading in any script, not just .md
     m.sourceURL = nil
@@ -2357,6 +2368,11 @@ func runSelfTest() {
     m.rebuild()
     expectBool("heading in a plain script", m.rows.first?.heading == true, true)
     expectBool("hash stripped from heading", m.tokens.first?.text.contains("#") == true, false)
+    // a hashtag is a word someone says, not a section marker
+    m.script = "#1 rule of demos"
+    m.rebuild()
+    expectBool("hashtag isn't a heading", m.rows.first?.heading == true, false)
+    expectBool("hashtag keeps its text", m.tokens.first?.text == "#1", true)
     m.script = liveScript
     m.rebuild()
     // the mic belongs to live mode only — every exit must shut it off
@@ -2745,6 +2761,14 @@ func runSelfTest() {
     let afterJump = m.scrollTarget
     m.handleTranscript(["hey", "everyone", "welcome", "back"], isFinal: false)
     expectBool("jump resumes tracking", m.scrollTarget > afterJump, true)
+    // toggling the mic drops the hold too — otherwise tracking stays frozen
+    // for the rest of the window after the mic comes back
+    m.jump(to: 0)
+    m.holdScrollForUser(60)
+    m.stopListening()
+    let afterMic = m.scrollTarget
+    m.handleTranscript(["hey", "everyone"], isFinal: false)   // moves pos 0 → 2
+    expectBool("mic toggle clears the hold", m.scrollTarget > afterMic, true)
     // leaving live mode drops the hold with it
     m.holdScrollForUser(60)
     m.enterEdit()
