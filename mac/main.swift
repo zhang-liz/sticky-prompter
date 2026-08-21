@@ -355,8 +355,7 @@ final class PrompterModel: NSObject, ObservableObject {
         panel.directoryURL = libraryDir
         panel.prompt = "Use Folder"
         panel.message = "Scripts are the .txt files in this folder; saves go here too."
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK, let url = panel.url {
+        if Self.runInFront(panel) == .OK, let url = panel.url {
             setLibraryDir(url)
         }
     }
@@ -399,6 +398,17 @@ final class PrompterModel: NSObject, ObservableObject {
         return alertsEnabled && a.runModal() == .alertFirstButtonReturn
     }
 
+    /// Run a file panel so it lands in front. The note floats above normal
+    /// windows, so a panel left at normal level opens behind it and looks like
+    /// nothing happened.
+    @discardableResult
+    static func runInFront(_ panel: NSSavePanel) -> NSApplication.ModalResponse {
+        NSApp.activate(ignoringOtherApps: true)
+        panel.level = .modalPanel   // above .floating, where the note sits
+        panel.makeKeyAndOrderFront(nil)
+        return panel.runModal()
+    }
+
     func openScriptFile() {
         guard confirmReplaceNote() else { return }
         let panel = NSOpenPanel()
@@ -407,8 +417,7 @@ final class PrompterModel: NSObject, ObservableObject {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = Self.openableTypes
         panel.message = "Choose a text, Markdown, RTF or Word file to use as your script."
-        NSApp.activate(ignoringOtherApps: true)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard Self.runInFront(panel) == .OK, let url = panel.url else { return }
         adoptScriptFile(url)
     }
 
@@ -640,8 +649,7 @@ final class PrompterModel: NSObject, ObservableObject {
             ? (sourceURL?.pathExtension ?? "txt") : "txt"
         panel.nameFieldStringValue = suggestCopy ? "\(uniqueLibraryName(stem)).\(ext)"
                                                  : "\(stem).\(ext)"
-        NSApp.activate(ignoringOtherApps: true)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard Self.runInFront(panel) == .OK, let url = panel.url else { return }
         // a Word original keeps its format; everything else is written as the
         // plain text the panel asked for
         if Self.isWordFile(url) {
