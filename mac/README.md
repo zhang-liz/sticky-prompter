@@ -40,7 +40,7 @@ Requires Xcode Command Line Tools (`xcode-select --install` if missing). The bui
 
 The script library lives in **File ▸ Scripts Library…** (`⌘L`).
 
-**Live mode**: all buttons disappear — just your script and a thin progress bar. The current sentence pins to the top edge, right under your camera. Controls are the keyboard and the menu-bar icon:
+**Live mode**: all buttons disappear — just your script and a thin progress bar. The current line pins to the top edge, right under your camera. Controls are the keyboard and the menu-bar icon:
 
 - `space` mic on/off · `←`/`→` nudge a word · `↑`/`↓` jump ~a line · `R` restart
 - **click any word** to read from there — the fastest way back in sync after a detour

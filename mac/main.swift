@@ -919,6 +919,7 @@ final class PrompterModel: NSObject, ObservableObject {
         if vocab.count > 100 { vocab = Array(vocab.prefix(100)) }
         pos = resetPos ? 0 : min(pos, tokens.count)
         anchor = pos
+        scrollLeadsVoice = false
         pending = []
         persist()
     }
@@ -1055,6 +1056,18 @@ final class PrompterModel: NSObject, ObservableObject {
         return rows.last?.id ?? 0
     }
 
+    // rows use Int ids, so words need their own kind of id to stay distinct
+    static func wordScrollID(_ i: Int) -> String { "word-\(i)" }
+
+    // The recognizer reports a word about 0.3s after it was spoken, which is
+    // about one word at reading speed. Voice tracking therefore scrolls for the
+    // next word, so a new line arrives as the reader reaches it. A click or an
+    // arrow key means "here", so those scroll for the word itself.
+    private var scrollLeadsVoice = false
+    var scrollWordIndex: Int {
+        min(pos + (scrollLeadsVoice ? 1 : 0), max(0, tokens.count - 1))
+    }
+
     var progress: Double { tokens.isEmpty ? 0 : Double(pos) / Double(tokens.count) }
 
     // MARK: matching (same algorithm as the web version)
@@ -1107,6 +1120,7 @@ final class PrompterModel: NSObject, ObservableObject {
         // consume() only steps over unspoken tokens on its way to a match, so a
         // script ending in a stage direction would stall one short of the end
         while pos < tokens.count, tokens[pos].norm.isEmpty { pos += 1 }
+        scrollLeadsVoice = pos > anchor
         if isFinal { anchor = pos }
         if pos >= tokens.count && !tokens.isEmpty {
             if !announcedEnd { announcedEnd = true; flash("🎉 End of script") }
@@ -1140,6 +1154,7 @@ final class PrompterModel: NSObject, ObservableObject {
 
     func jump(to i: Int) {
         releaseScrollHold()
+        scrollLeadsVoice = false
         pos = max(0, min(i, tokens.count))
         scrollTarget &+= 1   // jumping to the current row still has to scroll
         anchor = pos
@@ -1346,7 +1361,7 @@ struct ContentView: View {
         .sheet(isPresented: $m.editing) { EditorView(m: m) }
     }
 
-    // live mode: the sentence being read sits at the very top,
+    // live mode: the line being read sits at the very top,
     // as close to the camera as possible
     var scriptView: some View {
         GeometryReader { geo in
@@ -1372,6 +1387,7 @@ struct ContentView: View {
                                     .background((lineMode ? isCurrentLine : i == m.pos) ? hiBG : .clear)
                                     .onTapGesture(count: 2) { m.enterEdit() }
                                     .onTapGesture { m.jump(to: i) }   // click a word = read from here
+                                    .id(PrompterModel.wordScrollID(i))
                             }
                         }
                         // the row is what wraps, so the column limit has to land
@@ -1391,11 +1407,19 @@ struct ContentView: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { m.enterEdit() }
             .onChange(of: m.scrollTarget) { _ in
-                // a spring rather than easeOut: successive words land while the
-                // previous glide is still running, and a spring blends them into
-                // one continuous motion instead of restarting the ease each time
-                withAnimation(.interpolatingSpring(stiffness: 90, damping: 18)) {
-                    proxy.scrollTo(m.currentRowID, anchor: .topLeading)
+                // a spring rather than easeOut, so a fast reader's next line blends
+                // into the glide still running. Stiff and critically damped: the
+                // line has to arrive while the reader is still on its first word
+                withAnimation(.interpolatingSpring(stiffness: 400, damping: 40)) {
+                    // voice mode follows the word, because a long sentence wraps
+                    // across lines and each line has to reach the top in turn.
+                    // Words on one line share a top edge, so the view only moves
+                    // when the reader starts a new line.
+                    if m.autoScroll {
+                        proxy.scrollTo(m.currentRowID, anchor: .topLeading)
+                    } else {
+                        proxy.scrollTo(PrompterModel.wordScrollID(m.scrollWordIndex), anchor: .topLeading)
+                    }
                 }
             }
             }
@@ -2934,6 +2958,16 @@ func runSelfTest() {
     expectBool("suffixed tag compares on numbers",
                PrompterModel.isNewer("1.4.0-beta", than: "1.3.0"), true)
 
+    // ── voice scroll lead ──
+    m.script = PrompterModel.sample
+    m.rebuild()
+    m.handleTranscript(["hey", "everyone"], isFinal: false)
+    expect("voice scroll leads by one word", m.scrollWordIndex, m.pos + 1)
+    m.rebuild()
+    expect("a new read scrolls for the first word", m.scrollWordIndex, 0)
+    m.jump(to: m.tokens.count)
+    expect("scroll stops at the last word", m.scrollWordIndex, m.tokens.count - 1)
+
     // ── manual scroll override ──
     m.script = PrompterModel.sample
     m.rebuild()
@@ -2995,6 +3029,91 @@ func runSelfTest() {
     m.sourceURL = nil
     m.sourceBaseline = nil
     m.setLibraryDir(PrompterModel.defaultScriptsDir)
+    // ── the live view follows the voice line by line ──
+    // drives the real view: the matcher alone can't see where the window sits
+    if NSScreen.main != nil {
+        let v = PrompterModel()
+        v.persistEnabled = false
+        v.sourceURL = nil
+        v.sourceBaseline = nil
+        v.libraryBaseline = nil
+        v.alertsEnabled = false
+        v.autoListen = false
+        v.scriptName = ""
+        v.fontSize = 30
+        v.columnWidth = 1
+        // one long sentence: it wraps across many lines inside a single row
+        let spoken = "every morning our small team walks along quiet rivers before breakfast while curious neighbors watch purple herons circle above golden fields and ancient bridges".split(separator: " ").map(String.init)
+        v.script = spoken.joined(separator: " ")
+        v.rebuild()
+        v.goLive()
+        let host = NSHostingView(rootView: ContentView(m: v))
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240),
+                           styleMask: [.borderless], backing: .buffered, defer: false)
+        win.contentView = host
+        win.alphaValue = 0.01
+        win.orderFrontRegardless()
+        func spin(_ t: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(t)) }
+        func findScroll(_ view: NSView) -> NSScrollView? {
+            if let s = view as? NSScrollView { return s }
+            for c in view.subviews { if let s = findScroll(c) { return s } }
+            return nil
+        }
+        spin(0.3)
+        if let sv = findScroll(host) {
+            var lineMoves = 0
+            var slowMoves = 0
+            var voiceOffset: [Int: CGFloat] = [:]
+            for n in 1...spoken.count {
+                let before = sv.contentView.bounds.origin.y
+                v.handleTranscript(Array(spoken.prefix(n)), isFinal: false)
+                spin(0.25)
+                let early = sv.contentView.bounds.origin.y
+                spin(0.45)
+                let settled = sv.contentView.bounds.origin.y
+                voiceOffset[v.pos] = settled
+                guard settled != before else { continue }
+                lineMoves += 1
+                if (early - before) / (settled - before) < 0.9 { slowMoves += 1 }
+            }
+            expectBool("window follows wrapped lines inside one sentence", lineMoves >= 3, true)
+            expectBool("new line reaches the top within 250ms", lineMoves > 0 && slowMoves == 0, true)
+            // the recognizer reports a word about 0.3s late, so voice tracking
+            // shows where the reader will be one word on; a click means "here"
+            var jumpOffset: [Int: CGFloat] = [:]
+            for i in 0...11 {
+                v.jump(to: i)
+                spin(0.45)
+                jumpOffset[i] = sv.contentView.bounds.origin.y
+            }
+            let compared = (1...10).filter { voiceOffset[$0] != nil }
+            expectBool("voice tracking moves the line one word early",
+                       compared.count == 10 && compared.allSatisfy { voiceOffset[$0] == jumpOffset[$0 + 1] }, true)
+            expectBool("a click shows the clicked word's own line",
+                       (1...10).contains { jumpOffset[$0] != jumpOffset[$0 + 1] }
+                           && (1...10).contains { jumpOffset[$0] != voiceOffset[$0] }, true)
+            // steady mode highlights whole rows, so it still hops row by row
+            v.enterEdit()
+            v.script = "First short sentence here. Second short sentence here. Third short sentence here."
+            v.rebuild()
+            v.autoScroll = true
+            v.goLive()
+            spin(1.0)   // the view glides back to the top first
+            if let auto = findScroll(host) {
+                let top = auto.contentView.bounds.origin.y
+                v.jump(to: 4)
+                spin(0.7)
+                expectBool("steady mode still moves to the next row", auto.contentView.bounds.origin.y > top, true)
+            } else {
+                expectBool("steady mode has a scroll view", false, true)
+            }
+        } else {
+            expectBool("live view has a scroll view", false, true)
+        }
+        win.orderOut(nil)
+    } else {
+        print("SKIP live view scroll (no screen)")
+    }
     try? FileManager.default.removeItem(at: tmp)
     print(fails == 0 ? "ALL PASS" : "\(fails) FAILURES")
     exit(fails == 0 ? 0 : 1)
