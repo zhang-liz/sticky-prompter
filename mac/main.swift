@@ -635,9 +635,10 @@ final class PrompterModel: NSObject, ObservableObject {
         refreshSavedNames()       // Finder may have added files since launch
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
-        // keep .docx offered when the script came from one, so saving back to
-        // the original stays possible instead of silently becoming a .txt
-        if let u = sourceURL, Self.isWordFile(u), let t = UTType(filenameExtension: u.pathExtension) {
+        // keep the source's type offered (.docx, .md), so saving back to the
+        // original stays possible instead of silently becoming a .txt
+        let keptExt = Self.saveExtension(for: sourceURL)
+        if keptExt != "txt", let t = UTType(filenameExtension: keptExt) {
             panel.allowedContentTypes = [t, .plainText]
         } else {
             panel.allowedContentTypes = [.plainText]
@@ -649,8 +650,7 @@ final class PrompterModel: NSObject, ObservableObject {
         let stem = current.isEmpty
             ? (sourceURL?.deletingPathExtension().lastPathComponent ?? "Script")
             : current
-        let ext = (sourceURL.map { Self.isWordFile($0) } ?? false)
-            ? (sourceURL?.pathExtension ?? "txt") : "txt"
+        let ext = keptExt
         panel.nameFieldStringValue = suggestCopy ? "\(uniqueLibraryName(stem)).\(ext)"
                                                  : "\(stem).\(ext)"
         guard Self.runInFront(panel) == .OK, let url = panel.url else { return }
@@ -676,11 +676,19 @@ final class PrompterModel: NSObject, ObservableObject {
         flash("Saved “\(url.lastPathComponent)”")
     }
 
+    /// The file type the save panel offers for a script from this source.
+    static func saveExtension(for source: URL?) -> String {
+        guard let source = source, !isRichTextFile(source), !source.pathExtension.isEmpty else { return "txt" }
+        return source.pathExtension
+    }
+
     /// Point the note at the file that was just written, so the footer names it
     /// and a later external edit is still detected.
-    private func adoptSavedFile(_ url: URL) {
+    func adoptSavedFile(_ url: URL) {
         detach()
-        let inLibrary = url.deletingLastPathComponent().standardizedFileURL == libraryDir.standardizedFileURL
+        // the library only holds .txt, so anything else stays attached as its own file
+        let inLibrary = url.pathExtension.lowercased() == "txt"
+            && url.deletingLastPathComponent().standardizedFileURL == libraryDir.standardizedFileURL
         scriptName = url.deletingPathExtension().lastPathComponent
         if inLibrary {
             libraryBaseline = script
@@ -2642,6 +2650,20 @@ func runSelfTest() {
     conv.arguments = ["-convert", "docx", txtSrc.path, "-output", docx.path]
     try? conv.run(); conv.waitUntilExit()
     expectBool("docx import", PrompterModel.readScriptFile(docx)?.contains("word doc body") == true, true)
+    // saving keeps the type of a text file, but rich text can't be written back
+    for (name, want) in [("a.md", "md"), ("a.markdown", "markdown"), ("a.text", "text"), ("a.txt", "txt"),
+                         ("a.docx", "docx"), ("a.rtf", "txt"), ("a.html", "txt"), ("noext", "txt")] {
+        expectBool("save offers .\(want) for \(name)",
+                   PrompterModel.saveExtension(for: URL(fileURLWithPath: "/tmp/\(name)")) == want, true)
+    }
+    expectBool("save offers .txt with no source", PrompterModel.saveExtension(for: nil) == "txt", true)
+    // a Markdown file saved in the library folder stays a Markdown file
+    let mdInLibrary = m.libraryDir.appendingPathComponent("library-note.md")
+    m.script = "**bold** words"
+    m.adoptSavedFile(mdInLibrary)
+    expectBool("markdown in the library keeps its file", m.sourceURL?.lastPathComponent == "library-note.md", true)
+    expectBool("markdown in the library stays markdown", m.isMarkdown, true)
+    m.detach()
     // Word artifacts cleaned up on import
     expectBool("word import sanitized",
                PrompterModel.sanitizeWordImport("·\tItem\u{00A0}one\u{000B}\u{E000} two\u{FFFC}") == "• Item one\n• two", true)
