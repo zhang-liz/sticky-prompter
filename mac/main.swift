@@ -545,51 +545,6 @@ final class PrompterModel: NSObject, ObservableObject {
         return disk != base && disk != script
     }
 
-    /// Write the script back to the file it was opened from.
-    private func saveToSource(_ url: URL) {
-        if sourceChangedExternally(url) {
-            let a = NSAlert()
-            a.messageText = "“\(url.lastPathComponent)” changed outside Sticky Prompter"
-            a.informativeText = "Saving will overwrite those outside changes with the note's version."
-            a.addButton(withTitle: "Overwrite")
-            a.addButton(withTitle: "Cancel")
-            guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else {
-                flash("⚠️ Not saved — “\(url.lastPathComponent)” changed on disk")
-                return
-            }
-        }
-        if Self.isWordFile(url) {
-            if !wordSaveApproved {
-                let a = NSAlert()
-                a.messageText = "Save over the Word document?"
-                a.informativeText = "Sticky Prompter writes plain text — the document's original fonts, images and layout won't be kept."
-                a.addButton(withTitle: "Save")
-                a.addButton(withTitle: "Cancel")
-                guard alertsEnabled, a.runModal() == .alertFirstButtonReturn else { return }
-                wordSaveApproved = true
-            }
-            // the Word exporter gains a trailing newline on read-back —
-            // normalize the note first so note, baseline and disk agree
-            if !script.hasSuffix("\n") { script += "\n" }
-            if writeWordFile(url) {
-                sourceBaseline = Self.readScriptFile(url) ?? script
-                persist()   // keep the relaunch baseline in step with the file
-                flash("Saved “\(url.lastPathComponent)”")
-            } else {
-                flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
-            }
-            return
-        }
-        do {
-            try script.write(to: url, atomically: true, encoding: .utf8)
-            sourceBaseline = script
-            persist()   // keep the relaunch baseline in step with the file
-            flash("Saved “\(url.lastPathComponent)”")
-        } catch {
-            flash("⚠️ Couldn't save “\(url.lastPathComponent)”")
-        }
-    }
-
     /// Modal "name your script" prompt. Nil when cancelled or left blank.
     /// The defaults keep ⌘S's call site unchanged; Save As passes its own
     /// wording and seeds the field with a name that won't collide.
@@ -654,9 +609,33 @@ final class PrompterModel: NSObject, ObservableObject {
         panel.nameFieldStringValue = suggestCopy ? "\(uniqueLibraryName(stem)).\(ext)"
                                                  : "\(stem).\(ext)"
         guard Self.runInFront(panel) == .OK, let url = panel.url else { return }
+        writeSavedFile(to: url)
+    }
+
+    /// Asks before a save replaces a Word file. A variable so the self test can
+    /// answer for the person.
+    var confirmWordOverwrite: (URL) -> Bool = { url in
+        let a = NSAlert()
+        a.messageText = "Save over “\(url.lastPathComponent)”?"
+        a.informativeText = "Sticky Prompter writes plain text — the document's original fonts, images and layout won't be kept."
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        a.window.level = .modalPanel   // above .floating, where the note sits
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Write the note to the file the save panel named.
+    func writeSavedFile(to url: URL) {
+        let isWord = Self.isWordFile(url)
+        if isWord, FileManager.default.fileExists(atPath: url.path) {
+            let approved = wordSaveApproved
+                && sourceURL?.standardizedFileURL == url.standardizedFileURL
+            guard approved || confirmWordOverwrite(url) else { return }
+        }
         // a Word original keeps its format; everything else is written as the
         // plain text the panel asked for
-        if Self.isWordFile(url) {
+        if isWord {
             // the exporter reads back with a trailing newline, so add it first
             // or the note, baseline and disk disagree the moment it's written
             if !script.hasSuffix("\n") { script += "\n" }
@@ -673,6 +652,7 @@ final class PrompterModel: NSObject, ObservableObject {
             }
         }
         adoptSavedFile(url)
+        if isWord { wordSaveApproved = true }   // adopting clears it; this file is approved
         flash("Saved “\(url.lastPathComponent)”")
     }
 
@@ -938,7 +918,7 @@ final class PrompterModel: NSObject, ObservableObject {
                 flash("⚠️ “\(u.lastPathComponent)” changed on disk — ⌘S to review")
             } else if Self.isWordFile(u) {
                 if wordSaveApproved, script != sourceBaseline {
-                    // same trailing-newline normalization as saveToSource
+                    // same trailing-newline normalization as writeSavedFile
                     if !script.hasSuffix("\n") { script += "\n" }
                     if writeWordFile(u) { sourceBaseline = Self.readScriptFile(u) ?? script }
                 }
@@ -2852,6 +2832,39 @@ func runSelfTest() {
                m.sourceURL == nil && m.sourceBaseline == nil && m.libraryBaseline == nil
                    && m.scriptName.isEmpty && !m.wordSaveApproved, true)
     expectBool("detach keeps the text", m.script == "body text", true)
+    // saving over a Word file warns first, because its formatting is lost
+    // (outside the library, which the self test points at tmp)
+    let wordDir = tmp.appendingPathComponent("word-files", isDirectory: true)
+    try? FileManager.default.createDirectory(at: wordDir, withIntermediateDirectories: true)
+    let warnedDoc = wordDir.appendingPathComponent("warned.docx")
+    m.script = "original words"
+    _ = m.writeWordFile(warnedDoc)
+    m.detach()
+    var wordAsks = 0
+    var wordAnswer = false
+    m.confirmWordOverwrite = { _ in wordAsks += 1; return wordAnswer }
+    m.script = "replacement words"
+    m.writeSavedFile(to: warnedDoc)
+    expectBool("word overwrite asks first", wordAsks == 1, true)
+    expectBool("word overwrite cancel keeps the file",
+               PrompterModel.readScriptFile(warnedDoc)?.contains("original words") == true, true)
+    wordAnswer = true
+    m.writeSavedFile(to: warnedDoc)
+    expectBool("word overwrite yes writes the file",
+               PrompterModel.readScriptFile(warnedDoc)?.contains("replacement words") == true, true)
+    expectBool("word overwrite yes allows sync on go live", m.wordSaveApproved, true)
+    m.writeSavedFile(to: warnedDoc)
+    expectBool("same word file asks only once", wordAsks == 2, true)
+    let otherDoc = wordDir.appendingPathComponent("other.docx")
+    m.script = "first copy"
+    _ = m.writeWordFile(otherDoc)
+    m.writeSavedFile(to: otherDoc)
+    expectBool("a different word file asks again", wordAsks == 3, true)
+    let newDoc = wordDir.appendingPathComponent("brand-new.docx")
+    m.writeSavedFile(to: newDoc)
+    expectBool("a new word file has nothing to lose", wordAsks == 3, true)
+    m.detach()
+    m.script = "body text"
     // the suggested name never collides, so Return duplicates instead of replacing
     m.saveScript("Talk", text: "talk v1")
     expectBool("unique name suffixes a collision", m.uniqueLibraryName("Talk") == "Talk 2", true)
