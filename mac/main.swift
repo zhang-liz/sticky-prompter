@@ -131,6 +131,7 @@ final class PrompterModel: NSObject, ObservableObject {
     private let audioEngine = AVAudioEngine()
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
+    private let requestLock = NSLock()
     private var task: SFSpeechRecognitionTask?
     private var silenceTimer: Timer?
     private var taskGen = 0   // stale-task guard: cancelled tasks still fire callbacks
@@ -1202,7 +1203,7 @@ final class PrompterModel: NSObject, ObservableObject {
         guard format.sampleRate > 0 else { status = "⚠️ No microphone input found"; return }
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buf, _ in
-            self?.request?.append(buf)
+            self?.appendAudio(buf)
         }
         audioEngine.prepare()
         do { try audioEngine.start() } catch {
@@ -1237,6 +1238,27 @@ final class PrompterModel: NSObject, ObservableObject {
         }
     }
 
+    // The mic tap runs on its own thread while the main thread swaps `request`
+    // on every recognition restart, so every use of it goes through this lock.
+    func setAudioRequest(_ newRequest: SFSpeechAudioBufferRecognitionRequest) {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        request = newRequest
+    }
+
+    func appendAudio(_ buffer: AVAudioPCMBuffer) {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        request?.append(buffer)
+    }
+
+    func endAudioRequest() {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        request?.endAudio()
+        request = nil
+    }
+
     private func startTask(_ rec: SFSpeechRecognizer) {
         taskGen += 1
         let gen = taskGen
@@ -1247,7 +1269,7 @@ final class PrompterModel: NSObject, ObservableObject {
         if #available(macOS 13.0, *) { req.addsPunctuation = false }
         // NOTE: server-based recognition is noticeably more accurate than
         // on-device, so we don't set requiresOnDeviceRecognition
-        request = req
+        setAudioRequest(req)
         scheduleMaxDurationRollover()
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
@@ -1300,8 +1322,7 @@ final class PrompterModel: NSObject, ObservableObject {
         pending = []
         task?.cancel()   // its callback is ignored via the taskGen guard
         task = nil
-        request?.endAudio()
-        request = nil
+        endAudioRequest()
         startTask(rec)
     }
 
@@ -1314,8 +1335,7 @@ final class PrompterModel: NSObject, ObservableObject {
         silenceTimer?.invalidate()
         task?.cancel()
         task = nil
-        request?.endAudio()
-        request = nil
+        endAudioRequest()
         // only touch the engine if it was actually started — reaching for
         // inputNode instantiates the audio HAL, which blocks indefinitely in a
         // headless process (e.g. --selftest)
@@ -2454,6 +2474,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 }
 
+/// One thread feeds audio like the mic tap while this one swaps the request
+/// like a recognition restart. Run under Thread Sanitizer to see any race.
+func tapRaceStress(_ m: PrompterModel) {
+    let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64)!
+    buffer.frameLength = 64
+    let lock = NSLock()
+    var running = true
+    let fed = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async {
+        while true {
+            lock.lock(); let go = running; lock.unlock()
+            if !go { break }
+            m.appendAudio(buffer)
+        }
+        fed.signal()
+    }
+    for _ in 0..<3000 {
+        m.setAudioRequest(SFSpeechAudioBufferRecognitionRequest())
+        m.endAudioRequest()
+    }
+    lock.lock(); running = false; lock.unlock()
+    fed.wait()
+}
+
 // MARK: - self test (headless matcher verification: run with --selftest)
 
 func runSelfTest() {
@@ -3006,6 +3051,11 @@ func runSelfTest() {
     m.script = ""
     m.rebuild()
 
+    // the mic tap and a recognition restart can run at the same moment
+    let tapModel = PrompterModel()
+    tapModel.persistEnabled = false
+    tapRaceStress(tapModel)
+    expectBool("audio tap survives recognition restarts", true, true)
     // failed saves report failure
     let lockedDir = tmp.appendingPathComponent("locked", isDirectory: true)
     try? FileManager.default.createDirectory(at: lockedDir, withIntermediateDirectories: true)
