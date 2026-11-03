@@ -1152,6 +1152,25 @@ final class PrompterModel: NSObject, ObservableObject {
         if autoScroll { rescheduleAutoTimer() } // new row, new line timing
     }
 
+    /// The keys that work while the note is live. True when the key was used.
+    func handleLiveKey(keyCode: UInt16, chars: String?) -> Bool {
+        switch chars?.lowercased() {
+        case "r": restartFromTop(); return true
+        case "e": enterEdit(); return true
+        default: break
+        }
+        switch keyCode {
+        case 49:                          // space
+            if autoScroll { toggleAutoPlay() } else { toggleMic() }
+            return true
+        case 123: nudge(-1); return true  // ←
+        case 124: nudge(1); return true   // →
+        case 126: nudge(-8); return true  // ↑
+        case 125: nudge(8); return true   // ↓
+        default: return false
+        }
+    }
+
     func nudge(_ delta: Int) {
         let (sum, overflow) = pos.addingReportingOverflow(delta)
         jump(to: overflow ? (delta > 0 ? Int.max : Int.min) : sum)
@@ -2446,18 +2465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             if let fr = self.panel.firstResponder, fr is NSTextView { return ev }
             guard self.model.live else { return ev }
-            switch ev.charactersIgnoringModifiers?.lowercased() {
-            case "r": self.model.restartFromTop(); return nil
-            case "e": self.model.enterEdit(); return nil
-            default: break
-            }
-            switch ev.keyCode {
-            case 123: self.model.nudge(-1); return nil  // ←
-            case 124: self.model.nudge(1); return nil   // →
-            case 126: self.model.nudge(-8); return nil  // ↑
-            case 125: self.model.nudge(8); return nil   // ↓
-            default: return ev
-            }
+            return self.model.handleLiveKey(keyCode: ev.keyCode, chars: ev.charactersIgnoringModifiers) ? nil : ev
         }
     }
 }
@@ -3038,6 +3046,20 @@ func runSelfTest() {
     expectBool("suffixed tag compares on numbers",
                PrompterModel.isNewer("1.4.0-beta", than: "1.3.0"), true)
 
+    // ── live keys ──
+    m.script = PrompterModel.sample
+    m.rebuild()
+    m.listening = true   // simulate a hot mic
+    expectBool("space is used in voice mode", m.handleLiveKey(keyCode: 49, chars: " "), true)
+    expectBool("space turns the mic off", m.listening, false)
+    m.autoScroll = true
+    m.autoPaused = true
+    expectBool("space is used in auto-scroll", m.handleLiveKey(keyCode: 49, chars: " "), true)
+    expectBool("space starts auto-scroll", m.autoPaused, false)
+    expectBool("space pauses auto-scroll", m.handleLiveKey(keyCode: 49, chars: " ") && m.autoPaused, true)
+    m.stopAutoScroll()
+    m.autoScroll = false
+    expectBool("other keys pass through", m.handleLiveKey(keyCode: 0, chars: "a"), false)
     // ── voice scroll lead ──
     m.script = PrompterModel.sample
     m.rebuild()
