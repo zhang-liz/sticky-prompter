@@ -1278,6 +1278,7 @@ final class PrompterModel: NSObject, ObservableObject {
         // on-device, so we don't set requiresOnDeviceRecognition
         setAudioRequest(req)
         scheduleMaxDurationRollover()
+        let startedAt = Date()
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self = self, self.listening, gen == self.taskGen else { return }
@@ -1287,18 +1288,25 @@ final class PrompterModel: NSObject, ObservableObject {
                     self.handleTranscript(words, isFinal: r.isFinal)
                     self.scheduleSilenceRollover()
                     if r.isFinal { self.restartRecognition() }
-                } else if error != nil {
-                    // an immediately-failing recognizer (offline, throttled)
-                    // would otherwise spin in a restart loop
-                    self.consecutiveErrors += 1
-                    if self.consecutiveErrors >= 4 {
-                        self.stopListening()
-                        self.status = "⚠️ Speech recognition unavailable — try the mic again later"
-                    } else {
-                        self.restartRecognition()
-                    }
+                } else if let error = error {
+                    self.recognitionFailed(error, afterSeconds: Date().timeIntervalSince(startedAt))
                 }
             }
+        }
+    }
+
+    func recognitionFailed(_ error: Error, afterSeconds age: TimeInterval) {
+        // Apple's "no speech detected" after a real wait is just a quiet reader,
+        // not a broken recognizer. An immediately-failing recognizer (offline,
+        // throttled) would otherwise spin in a restart loop, so that still counts.
+        let e = error as NSError
+        let quietReader = e.domain == "kAFAssistantErrorDomain" && e.code == 1110 && age >= 1
+        if !quietReader { consecutiveErrors += 1 }
+        if consecutiveErrors >= 4 {
+            stopListening()
+            status = "⚠️ Speech recognition unavailable — try the mic again later"
+        } else {
+            restartRecognition()
         }
     }
 
@@ -3070,6 +3078,22 @@ func runSelfTest() {
     m.jump(to: m.tokens.count)
     expect("scroll stops at the last word", m.scrollWordIndex, m.tokens.count - 1)
 
+    // ── recognizer errors ──
+    let noSpeech = NSError(domain: "kAFAssistantErrorDomain", code: 1110)
+    let silent = PrompterModel()
+    silent.persistEnabled = false
+    silent.alertsEnabled = false
+    silent.listening = true   // simulate a hot mic
+    for _ in 0..<6 { silent.recognitionFailed(noSpeech, afterSeconds: 8) }
+    expectBool("a long pause keeps the mic on", silent.listening, true)
+    for _ in 0..<4 { silent.recognitionFailed(noSpeech, afterSeconds: 0.1) }
+    expectBool("instant no-speech errors still stop the loop", silent.listening, false)
+    let broken = PrompterModel()
+    broken.persistEnabled = false
+    broken.alertsEnabled = false
+    broken.listening = true
+    for _ in 0..<4 { broken.recognitionFailed(NSError(domain: "x", code: 1), afterSeconds: 8) }
+    expectBool("real errors still stop the mic", broken.listening, false)
     // ── manual scroll override ──
     m.script = PrompterModel.sample
     m.rebuild()
